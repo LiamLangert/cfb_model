@@ -1,0 +1,14 @@
+[project]
+name = "cfb-model"
+version = "0.1.0"
+description = "RAPPA team ratings from play-by-play, for college football and the NFL"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cfbd>=5.31.2",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "python-dotenv>=1.2.3",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+]

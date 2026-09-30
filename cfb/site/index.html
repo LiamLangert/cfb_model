@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>College RAPPA Ratings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --ink: #14171c; --muted: #6b7280; --line: #e5e7eb;
+    --pos: #1a9e5c; --neg: #d6453d; --accent: #2f6fed; --hover: #f1f4fa;
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+    --context: #d9dce1; --context-hover: #6b7280; --grid: #eef0f3; --axis: #cfd3da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0e1116; --panel: #161a21; --ink: #e8eaed; --muted: #8b93a1; --line: #262c36;
+            --pos: #3fcf85; --neg: #ff6b61; --accent: #6e9bff; --hover: #1d232d;
+            --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+            --context: #2c333e; --context-hover: #aab2bf; --grid: #1f252e; --axis: #363e4a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, system-ui, sans-serif; }
+  header { max-width: 1200px; margin: 0 auto; padding: 32px 16px 8px; }
+  h1 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin-top: 6px; font-size: 14px; line-height: 1.5; }
+  .controls { max-width: 1200px; margin: 16px auto 12px; padding: 0 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+  .seg button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600;
+                padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  input[type=search], select { background: var(--panel); border: 1px solid var(--line); color: var(--ink); border-radius: 10px;
+                       padding: 8px 12px; font: inherit; font-size: 13px; min-width: 160px; }
+  select { cursor: pointer; }
+  .wrap { max-width: 1200px; margin: 0 auto 40px; padding: 0 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { position: sticky; top: 0; background: var(--panel); text-align: right; font-size: 11px; font-weight: 700;
+       text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 12px 10px;
+       border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; white-space: nowrap; }
+  th:hover { color: var(--ink); }
+  th.sorted { color: var(--accent); }
+  th .arrow { display: inline-block; width: 10px; }
+  th.left, td.left { text-align: left; }
+  th.group { cursor: default; text-align: center; border-bottom: 0; padding-bottom: 0; color: var(--ink); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap;
+       font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 13px; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--hover); }
+  .rank { color: var(--muted); width: 36px; }
+  .team { display: flex; align-items: center; gap: 10px; font-family: Inter, sans-serif; font-size: 14px; }
+  .team img { width: 30px; height: 30px; object-fit: contain; }
+  .team .name { font-weight: 600; }
+  .team .abbr { color: var(--muted); font-size: 12px; }
+  td.conf { font-family: Inter, sans-serif; font-size: 12px; color: var(--muted); }
+  .stripe { width: 4px; height: 30px; border-radius: 2px; }
+  .cell { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+  .val { min-width: 52px; text-align: right; }
+  .net { font-weight: 700; font-size: 14px; }
+  .count { color: var(--muted); }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.5; }
+  [hidden] { display: none !important; }
+  .group-controls { display: contents; }
+  .intro { font-size: 14px; line-height: 1.55; margin: 0 0 14px; max-width: 780px; }
+  .intro b { font-weight: 700; }
+  table.bench th { cursor: default; }
+  table.bench th:hover { color: var(--muted); }
+  table.bench th.group:hover { color: var(--ink); }
+  table.bench td.left { font-family: Inter, sans-serif; font-weight: 600; font-size: 14px; }
+  table.bench .partial { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
+  table.bench .ref { color: var(--muted); }
+  table.bench .best { font-weight: 700; color: var(--ink); }
+  table.bench .worse { color: var(--muted); }
+  table.bench .se { color: var(--muted); font-size: 11px; margin-left: 4px; }
+  table.bench tr.all td { border-top: 2px solid var(--line); font-weight: 700; }
+  table.bench td.split { border-left: 1px solid var(--line); }
+  table.bench th.split { border-left: 1px solid var(--line); }
+  .qb-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .qb-legend { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 13px; font-weight: 600; }
+  .chip .key { width: 16px; height: 2px; border-radius: 1px; }
+  .chip button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 15px; line-height: 1;
+                 cursor: pointer; padding: 2px 6px; border-radius: 999px; }
+  .chip button:hover { color: var(--ink); background: var(--hover); }
+  .hint { color: var(--muted); font-size: 12px; }
+  .chart-card { position: relative; overflow: visible; padding: 8px 4px 4px; }
+  .chart svg { display: block; width: 100%; touch-action: none; }
+  .chart svg:focus { outline: none; }
+  .chart svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+  .chart .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .chart .end-label { fill: var(--ink); font-size: 12px; font-weight: 600; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line);
+         border-radius: 10px; padding: 8px 10px; font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+         min-width: 170px; z-index: 2; }
+  .tip .when { color: var(--muted); font-weight: 600; margin-bottom: 4px; }
+  .tip .row { display: flex; align-items: center; gap: 8px; padding: 2px 0; white-space: nowrap; }
+  .tip .key { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+  .tip .val { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tip .who { color: var(--muted); }
+  table.qb-table td.left { font-family: Inter, sans-serif; font-weight: 600; }
+  table.qb-table th .key { display: inline-block; width: 12px; height: 2px; border-radius: 1px; vertical-align: middle; margin-right: 6px; }
+  table.qb-table .none { color: var(--muted); }
+  @media (max-width: 700px) { .team .abbr, th.conf, td.conf { display: none; } h1 { font-size: 22px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>College RAPPA Ratings</h1>
+  <div class="sub">Regularized Adjusted Predicted Points Added: opponent-adjusted PPA per play from a ridge regression on CFBD play-by-play, for every FBS team. Positive is better for every column, including defense.</div>
+</header>
+
+<div class="controls">
+  <div class="seg" id="views" hidden></div>
+  <div class="group-controls" id="ratings-controls">
+    <div class="seg" id="seasons"></div>
+    <select id="confs" aria-label="Conference"></select>
+    <input type="search" id="search" placeholder="Filter teams…" aria-label="Filter teams">
+  </div>
+</div>
+
+<div class="wrap" id="bench-view" hidden>
+  <p class="intro" id="bench-intro"></p>
+  <div class="card">
+    <table class="bench">
+      <thead>
+        <tr>
+          <th class="group" colspan="2"></th>
+          <th class="group split" colspan="3">MAE (points)</th>
+          <th class="group split" colspan="3">Log-loss</th>
+          <th class="group split" colspan="2">RAPPA − ESPN, per game</th>
+        </tr>
+        <tr>
+          <th class="left">Season</th><th>Games</th>
+          <th class="split">RAPPA</th><th>ESPN</th><th>Market</th>
+          <th class="split">RAPPA</th><th>ESPN</th><th>Market</th>
+          <th class="split">MAE</th><th>Log-loss</th>
+        </tr>
+      </thead>
+      <tbody id="bench-body"></tbody>
+    </table>
+  </div>
+  <div class="legend">
+    Every source is graded on the same FBS-vs-FBS games: week 2 on, bowls and playoff games included, and only games all three projected.
+    <b>MAE</b> is how many points the projected home margin missed the final margin by, on average.
+    <b>Log-loss</b> scores the home team's win probability; lower is better, a coin flip scores 0.693, and ties are left out.
+    The better of RAPPA and ESPN is in bold. The closing <b>market</b> (consensus spread for margin, de-vigged consensus moneyline for win probability) is the reference both are chasing.
+    <b>RAPPA − ESPN</b> is the per-game difference with its standard error; negative (green) means RAPPA was better.
+    RAPPA rates quarterbacks on their own (following transfers) and uses each game's starter, and adds special teams (punts and kickoffs, valued by expected points and counted at face value) to its scrimmage ratings.
+    Its win probability is Φ(margin / σ), with σ the spread of its own earlier misses. 2022 is the warm-up season: the first with ratings, and so no prior.
+    Built by <code>uv run -m cfb.benchmark</code>.
+  </div>
+</div>
+
+<div class="wrap" id="qb-view" hidden>
+  <p class="intro" id="qb-intro"></p>
+  <div class="qb-bar">
+    <div class="seg" id="qb-metric"></div>
+    <input type="search" id="qb-search" list="qb-names" placeholder="Add a quarterback…" aria-label="Add a quarterback">
+    <datalist id="qb-names"></datalist>
+    <div class="qb-legend" id="qb-legend" aria-label="Highlighted quarterbacks"></div>
+    <span class="hint" id="qb-hint" aria-live="polite"></span>
+  </div>
+  <div class="card chart-card">
+    <div class="chart" id="qb-chart"></div>
+    <div class="tip" id="qb-tip" hidden></div>
+  </div>
+  <div class="legend" id="qb-notes"></div>
+  <div class="card" style="margin-top: 14px">
+    <table class="bench qb-table">
+      <thead><tr id="qb-table-head"></tr></thead>
+      <tbody id="qb-table-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="wrap" id="ratings-view">
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th class="group" colspan="3"></th>
+          <th class="group" colspan="3">Composite</th>
+          <th class="group" colspan="3">Offense</th>
+          <th class="group" colspan="2">Defense</th>
+          <th class="group" colspan="2">Plays</th>
+        </tr>
+        <tr id="head"></tr>
+      </thead>
+      <tbody id="body"></tbody>
+    </table>
+  </div>
+  <div class="legend">Click any column to sort; click again to reverse. Quarterbacks are rated on their own: offense Pass is the rest of the passing game, and QB is the team's passers' rating weighted by their dropbacks. Composites blend rush and pass (with QB) at the league play mix; net = off + def. Ratings are neutral-site PPA per play vs the average FBS team, from each season's full fit, shrunk toward the season before. Every FCS opponent is rated as one pooled team, which is not shown. Power conferences are the SEC, Big Ten, Big 12 and ACC, the Pac-12 through 2023, and Notre Dame.</div>
+</div>
+
+<script>
+const COLS = [
+  { key: "rank", label: "#", left: true, rank: true },
+  { key: "team", label: "Team", left: true, text: true },
+  { key: "conference", label: "Conf", left: true, text: true, conf: true },
+  { key: "net", label: "Net" },
+  { key: "off", label: "Off" },
+  { key: "def", label: "Def" },
+  { key: "rush_off", label: "Rush" },
+  { key: "pass_off", label: "Pass" },
+  { key: "qb", label: "QB" },
+  { key: "rush_def", label: "Rush" },
+  { key: "pass_def", label: "Pass" },
+  { key: "plays_off", label: "Off", count: true },
+  { key: "plays_def", label: "Def", count: true },
+];
+const state = { view: "Ratings", season: null, conf: "All", sort: "net", desc: true, q: "" };
+let DATA = {};
+let CONFS = {};
+const GROUPS = { All: "All FBS", Power: "Power conferences", G5: "Group of Five" };
+let BENCH = null;
+const VIEWS = ["Ratings", "Accuracy vs FPI", "QBs"];
+let QBS = null;
+
+function store(k, v) { try { localStorage.setItem("rappa-cfb." + k, v); } catch (e) {} }
+function recall(k) { try { return localStorage.getItem("rappa-cfb." + k); } catch (e) { return null; } }
+
+function seg(el, options, current, onPick) {
+  el.innerHTML = "";
+  for (const opt of options) {
+    const b = document.createElement("button");
+    b.textContent = opt;
+    if (opt === current) b.className = "on";
+    b.onclick = () => onPick(opt);
+    el.appendChild(b);
+  }
+}
+
+function renderControls() {
+  const seasons = Object.keys(DATA).sort().reverse();
+  seg(document.getElementById("seasons"), seasons, state.season, s => { state.season = s; store("season", s); render(); });
+  const sel = document.getElementById("confs");
+  const confs = CONFS[state.season] || [];
+  if (!(state.conf in GROUPS) && !confs.includes(state.conf)) state.conf = "All";
+  sel.innerHTML = "";
+  const add = (value, label, parent) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = label;
+    if (value === state.conf) o.selected = true;
+    parent.appendChild(o);
+  };
+  for (const k in GROUPS) add(k, GROUPS[k], sel);
+  const group = document.createElement("optgroup");
+  group.label = "Conference";
+  for (const c of confs) add(c, c, group);
+  sel.appendChild(group);
+}
+
+function renderHead() {
+  const tr = document.getElementById("head");
+  tr.innerHTML = "";
+  for (const c of COLS) {
+    const th = document.createElement("th");
+    if (c.left) th.classList.add("left");
+    const on = state.sort === c.key || (c.rank && state.sort === "net");
+    if (state.sort === c.key) th.classList.add("sorted");
+    if (c.conf) th.classList.add("conf");
+    th.innerHTML = `${c.label} <span class="arrow">${state.sort === c.key ? (state.desc ? "▾" : "▴") : ""}</span>`;
+    th.onclick = () => {
+      const key = c.rank ? "net" : c.key;
+      if (state.sort === key) state.desc = !state.desc;
+      else { state.sort = key; state.desc = !c.text; }
+      render();
+    };
+    tr.appendChild(th);
+  }
+}
+
+function fmt(v) { return (v > 0 ? "+" : "") + v.toFixed(3); }
+
+function signed(v, digits) { return (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(digits); }
+
+function renderBench() {
+  const all = BENCH.find(r => r.season === "all");
+  const seasons = BENCH.filter(r => r.season !== "all");
+  const full = seasons.filter(r => r.games >= 500);
+  const maeWins = full.filter(r => r.mae_rappa < r.mae_espn).length;
+  const llWins = full.filter(r => r.ll_rappa < r.ll_espn).length;
+  document.getElementById("bench-intro").innerHTML =
+    `Over <b>${all.games.toLocaleString()}</b> games from ${seasons[0].season} to ${seasons[seasons.length - 1].season},
+     RAPPA misses the final margin by <b>${Math.abs(all.mae_rappa_espn).toFixed(2)} ± ${all.mae_rappa_espn_se.toFixed(2)}</b>
+     ${all.mae_rappa_espn > 0 ? "more" : "fewer"} points a game than ESPN's FPI, and its log-loss is
+     <b>${Math.abs(all.ll_rappa_espn).toFixed(3)} ± ${all.ll_rappa_espn_se.toFixed(3)}</b> ${all.ll_rappa_espn > 0 ? "higher" : "lower"}.
+     RAPPA had the lower MAE in ${maeWins} of ${full.length} full seasons, and the lower log-loss in ${llWins} of ${full.length}.
+     ${all.mae_market < Math.min(all.mae_rappa, all.mae_espn) && all.ll_market < Math.min(all.ll_rappa, all.ll_espn)
+       ? "The closing market beats both." : "The closing market has the lowest MAE."}`;
+
+  const body = document.getElementById("bench-body");
+  body.innerHTML = "";
+  for (const r of BENCH) {
+    const tr = document.createElement("tr");
+    if (r.season === "all") tr.className = "all";
+    const cls = (mine, theirs) => mine < theirs ? "best" : "worse";
+    const diff = (d, se, digits) => {
+      const color = d < 0 ? "var(--pos)" : d > 0 ? "var(--neg)" : "var(--muted)";
+      return `<span style="color:${color}">${signed(d, digits)}</span><span class="se">±${se.toFixed(digits)}</span>`;
+    };
+    const partial = r.season !== "all" && r.games < 500 ? `<span class="partial">wk ${r.weeks.replace("-", "–")}</span>` : "";
+    tr.innerHTML = `
+      <td class="left">${r.season === "all" ? "All" : r.season}${partial}</td>
+      <td class="count">${r.games}</td>
+      <td class="split"><span class="${cls(r.mae_rappa, r.mae_espn)}">${r.mae_rappa.toFixed(2)}</span></td>
+      <td><span class="${cls(r.mae_espn, r.mae_rappa)}">${r.mae_espn.toFixed(2)}</span></td>
+      <td class="ref">${r.mae_market.toFixed(2)}</td>
+      <td class="split"><span class="${cls(r.ll_rappa, r.ll_espn)}">${r.ll_rappa.toFixed(3)}</span></td>
+      <td><span class="${cls(r.ll_espn, r.ll_rappa)}">${r.ll_espn.toFixed(3)}</span></td>
+      <td class="ref">${r.ll_market.toFixed(3)}</td>
+      <td class="split">${diff(r.mae_rappa_espn, r.mae_rappa_espn_se, 2)}</td>
+      <td>${diff(r.ll_rappa_espn, r.ll_rappa_espn_se, 3)}</td>`;
+    body.appendChild(tr);
+  }
+}
+
+function available() {
+  return VIEWS.filter(v => v === "Ratings" || (v === "Accuracy vs FPI" && BENCH) || (v === "QBs" && QBS));
+}
+
+function renderView() {
+  const views = available();
+  const el = document.getElementById("views");
+  el.hidden = views.length < 2;
+  seg(el, views, state.view, v => { state.view = v; store("view", v); renderView(); });
+  document.getElementById("ratings-controls").hidden = state.view !== "Ratings";
+  document.getElementById("ratings-view").hidden = state.view !== "Ratings";
+  document.getElementById("bench-view").hidden = state.view !== "Accuracy vs FPI";
+  document.getElementById("qb-view").hidden = state.view !== "QBs";
+  if (state.view === "Accuracy vs FPI") renderBench();
+  else if (state.view === "QBs") renderQBs();
+  else render();
+}
+
+function render() {
+  renderControls();
+  renderHead();
+  let rows = (DATA[state.season] || []).slice();
+  // Rank is always by net within the season, regardless of the current sort.
+  rows.sort((a, b) => b.net - a.net).forEach((r, i) => r.rank = i + 1);
+  if (state.conf === "Power") rows = rows.filter(r => r.power);
+  else if (state.conf === "G5") rows = rows.filter(r => !r.power);
+  else if (state.conf !== "All") rows = rows.filter(r => r.conference === state.conf);
+  if (state.q) {
+    const q = state.q.toLowerCase();
+    rows = rows.filter(r => [r.team, r.espn_name, r.abbreviation].some(v => (v || "").toLowerCase().includes(q)));
+  }
+  const col = COLS.find(c => c.key === state.sort);
+  rows.sort((a, b) => {
+    const x = a[state.sort], y = b[state.sort];
+    const cmp = col && col.text ? String(x).localeCompare(String(y)) : x - y;
+    return state.desc ? -cmp : cmp;
+  });
+
+  const body = document.getElementById("body");
+  body.innerHTML = "";
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    for (const c of COLS) {
+      const td = document.createElement("td");
+      if (c.rank) { td.className = "left rank"; td.textContent = r.rank; }
+      else if (c.conf) { td.className = "left conf"; td.textContent = r.conference; }
+      else if (c.text) {
+        td.className = "left";
+        const dark = r.logo_dark ? `<source srcset="${r.logo_dark}" media="(prefers-color-scheme: dark)">` : "";
+        td.innerHTML = `<div class="team"><span class="stripe" style="background:${r.color || "#888"}"></span>
+          <picture>${dark}<img src="${r.logo || ""}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"></picture>
+          <span class="name">${r.team}</span><span class="abbr">${r.abbreviation || ""}</span></div>`;
+      } else if (c.count) { td.className = "count"; td.textContent = r[c.key]; }
+      else {
+        const v = r[c.key];
+        const color = v >= 0 ? "var(--pos)" : "var(--neg)";
+        if (c.key === "net") td.className = "net";
+        td.innerHTML = `<div class="cell"><span class="val" style="color:${color}">${fmt(v)}</span></div>`;
+      }
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+}
+
+// ---- Quarterback rankings over time --------------------------------------
+// Every ranked quarterback is a thin context line; up to four are highlighted
+// in the validated series slots. A colour belongs to the quarterback, not his
+// rank, so removing one never repaints the rest.
+const SVGNS = "http://www.w3.org/2000/svg";
+const QB_SLOTS = 4;
+let QB = null;
+const qbState = { metric: "Rank", picks: [], at: null };
+
+function svgEl(tag, attrs, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function lastName(name) {
+  const parts = name.split(" ");
+  return parts.length > 1 ? parts.slice(1).join(" ") : name;
+}
+
+function prepQBs() {
+  const seasons = Object.keys(QBS).sort();
+  const byId = new Map();
+  let maxRank = 2, lo = Infinity, hi = -Infinity;
+  seasons.forEach((s, i) => {
+    for (const r of QBS[s].rows) {
+      if (!byId.has(r.id)) byId.set(r.id, { id: r.id, name: r.name, pts: [], at: new Map() });
+      const q = byId.get(r.id);
+      q.name = r.name;
+      const p = { i, season: s, team: r.team, rank: r.rank, rating: r.rating };
+      q.pts.push(p);
+      q.at.set(i, p);
+      maxRank = Math.max(maxRank, r.rank);
+      lo = Math.min(lo, r.rating);
+      hi = Math.max(hi, r.rating);
+    }
+  });
+  const qbs = [...byId.values()];
+  for (const q of qbs) {
+    const first = q.pts[0].season, last = q.pts[q.pts.length - 1].season;
+    q.label = `${q.name} · ${q.pts[q.pts.length - 1].team} · ${first === last ? first : first + "–" + last}`;
+  }
+  const full = seasons.filter(s => !QBS[s].partial);
+  QB = { seasons, byId, qbs, maxRank, lo, hi, latest: full[full.length - 1] || seasons[seasons.length - 1] };
+}
+
+function pickOf(id) { return qbState.picks.find(p => p.id === id); }
+
+function savePicks() { store("qbs", JSON.stringify(qbState.picks)); }
+
+function loadPicks() {
+  let picks = [];
+  try { picks = JSON.parse(recall("qbs") || "null"); } catch (e) { picks = null; }
+  if (!Array.isArray(picks)) {
+    // First visit: the latest full season's top three.
+    picks = QBS[QB.latest].rows.slice(0, 3).map((r, k) => ({ id: r.id, slot: k }));
+  }
+  qbState.picks = picks.filter(p => p && QB.byId.has(p.id) && p.slot >= 0 && p.slot < QB_SLOTS).slice(0, QB_SLOTS);
+}
+
+function togglePick(id) {
+  const hint = document.getElementById("qb-hint");
+  hint.textContent = "";
+  if (pickOf(id)) {
+    qbState.picks = qbState.picks.filter(p => p.id !== id);
+  } else {
+    const used = new Set(qbState.picks.map(p => p.slot));
+    let slot = [0, 1, 2, 3].find(k => !used.has(k));
+    if (slot === undefined) {
+      // Four at most: the oldest pick makes room, and the newcomer takes its colour.
+      const dropped = qbState.picks.shift();
+      slot = dropped.slot;
+      hint.textContent = `Four at a time — removed ${QB.byId.get(dropped.id).name}.`;
+    }
+    qbState.picks.push({ id, slot });
+  }
+  savePicks();
+  renderQBs();
+}
+
+function initQBControls() {
+  const saved = recall("qbMetric");
+  if (saved === "Rank" || saved === "Rating") qbState.metric = saved;
+  const list = document.getElementById("qb-names");
+  for (const q of [...QB.qbs].sort((a, b) => a.name.localeCompare(b.name))) {
+    const o = document.createElement("option");
+    o.value = q.label;
+    list.appendChild(o);
+  }
+  const input = document.getElementById("qb-search");
+  input.addEventListener("change", () => {
+    const typed = input.value.trim().toLowerCase();
+    const q = QB.qbs.find(q => q.label === input.value) || QB.qbs.find(q => q.name.toLowerCase() === typed);
+    if (q && !pickOf(q.id)) togglePick(q.id);
+    input.value = "";
+  });
+  let pending = 0;
+  window.addEventListener("resize", () => {
+    cancelAnimationFrame(pending);
+    pending = requestAnimationFrame(() => { if (state.view === "QBs") drawQBChart(); });
+  });
+}
+
+function renderQBs() {
+  if (!QB) { prepQBs(); loadPicks(); initQBControls(); }
+  seg(document.getElementById("qb-metric"), ["Rank", "Rating"], qbState.metric,
+      v => { qbState.metric = v; store("qbMetric", v); renderQBs(); });
+  const top = QBS[QB.latest].rows[0];
+  document.getElementById("qb-intro").textContent =
+    "Each season's FBS quarterbacks ranked by RAPPA's quarterback rating: the PPA per dropback a passer adds on top of " +
+    `his team's supporting cast, against the average dropback. ${top.name} led ${QB.latest} at ${signed(top.rating, 3)}.`;
+  const current = QB.seasons.filter(s => QBS[s].partial);
+  document.getElementById("qb-notes").textContent =
+    "Gray lines are every other ranked quarterback — hover one to see who it is, click it to highlight it (up to four). " +
+    "A quarterback is ranked in a season once he has 30% of the most dropbacks that season, about 160 in a full one. " +
+    "One who transferred keeps one line, and the team shown is the one he played for that season. " +
+    (current.length ? `${current.join(", ")}* ${current.length > 1 ? "are" : "is"} in progress (through week ` +
+      `${QBS[current[current.length - 1]].through_week}), so its ranks are provisional. ` : "") +
+    "Ratings are from each season's full fit, shrunk toward replacement level, so a short season reads low.";
+  renderQBLegend();
+  drawQBChart();
+  renderQBTable();
+}
+
+function renderQBLegend() {
+  const box = document.getElementById("qb-legend");
+  box.innerHTML = "";
+  if (!qbState.picks.length) {
+    const h = document.createElement("span");
+    h.className = "hint";
+    h.textContent = "Click a line or search to highlight a quarterback.";
+    box.appendChild(h);
+  }
+  for (const p of qbState.picks) {
+    const q = QB.byId.get(p.id);
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    const key = document.createElement("span");
+    key.className = "key";
+    key.style.background = `var(--series-${p.slot + 1})`;
+    const name = document.createElement("span");
+    name.textContent = q.name;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "×";
+    x.setAttribute("aria-label", `Remove ${q.name}`);
+    x.onclick = () => togglePick(p.id);
+    chip.append(key, name, x);
+    box.appendChild(chip);
+  }
+}
+
+function rankTicks(max) {
+  const step = max > 120 ? 25 : max > 45 ? 10 : 5, out = [1];
+  for (let t = step; t <= max; t += step) out.push(t);
+  return out;
+}
+
+function ratingTicks(lo, hi) {
+  const out = [];
+  for (let t = Math.ceil(lo / 0.05) * 0.05; t <= hi + 1e-9; t += 0.05) out.push(Math.round(t * 100) / 100);
+  return out;
+}
+
+function drawLine(g, q, x, y, color, width, dots) {
+  let run = [];
+  const flush = () => {
+    if (run.length > 1) {
+      svgEl("path", {
+        d: run.map((p, k) => `${k ? "L" : "M"}${x(p.i).toFixed(1)},${y(p).toFixed(1)}`).join(""),
+        fill: "none", stroke: color, "stroke-width": width, "stroke-linejoin": "round", "stroke-linecap": "round",
+      }, g);
+    } else if (run.length === 1 && !dots) {
+      svgEl("circle", { cx: x(run[0].i), cy: y(run[0]), r: 1.5, fill: color }, g);
+    }
+    run = [];
+  };
+  // A season he was not ranked in breaks the line rather than bridging it.
+  q.pts.forEach((p, k) => { if (k && p.i !== q.pts[k - 1].i + 1) flush(); run.push(p); });
+  flush();
+  if (dots) for (const p of q.pts) svgEl("circle", { cx: x(p.i), cy: y(p), r: 4, fill: color, stroke: "var(--panel)", "stroke-width": 2 }, g);
+}
+
+function placeLabels(g, labels, bottom) {
+  // Lines that end in the same season can put their labels on top of each
+  // other: spread those apart and give each a short leader back to its line.
+  const groups = new Map();
+  for (const l of labels) {
+    const k = Math.round(l.x);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(l);
+  }
+  for (const group of groups.values()) {
+    group.sort((a, b) => a.y - b.y);
+    group.forEach((l, k) => { l.ty = k ? Math.max(l.y, group[k - 1].ty + 15) : l.y; });
+    const over = group[group.length - 1].ty - bottom;
+    if (over > 0) group.forEach(l => { l.ty -= over; });
+    for (const l of group) {
+      if (Math.abs(l.ty - l.y) > 1) {
+        svgEl("path", { d: `M${l.x + 6},${l.y}L${l.x + 11},${l.ty}`, stroke: "var(--axis)", "stroke-width": 1, fill: "none" }, g);
+      }
+      svgEl("text", { x: l.x + 14, y: l.ty + 4, class: "end-label" }, g).textContent = l.text;
+    }
+  }
+}
+
+function drawQBChart() {
+  const host = document.getElementById("qb-chart");
+  host.innerHTML = "";
+  const W = Math.max(300, host.clientWidth);
+  const narrow = W < 560;
+  const H = narrow ? 380 : 460;
+  const m = { top: 14, right: narrow ? 78 : 118, bottom: 30, left: narrow ? 34 : 46 };
+  const pw = W - m.left - m.right, ph = H - m.top - m.bottom;
+  const n = QB.seasons.length;
+  const step = n > 1 ? pw / (n - 1) : 0;
+  const x = i => m.left + (n > 1 ? i * step : pw / 2);
+  const rank = qbState.metric === "Rank";
+  const pad = (QB.hi - QB.lo) * 0.06, top = QB.hi + pad, bot = QB.lo - pad;
+  const y = rank ? (p => m.top + (p.rank - 1) / (QB.maxRank - 1) * ph)
+                 : (p => m.top + (top - p.rating) / (top - bot) * ph);
+
+  const root = svgEl("svg", {
+    viewBox: `0 0 ${W} ${H}`, width: W, height: H, tabindex: 0, role: "img",
+    "aria-label": `Quarterback ${rank ? "rankings" : "ratings"} by season, ${QB.seasons[0]} to ${QB.seasons[n - 1]}; ` +
+                  "the table below lists the highlighted quarterbacks' values.",
+  }, host);
+
+  for (const t of rank ? rankTicks(QB.maxRank) : ratingTicks(bot, top)) {
+    const ty = rank ? y({ rank: t }) : y({ rating: t });
+    const zero = !rank && t === 0;
+    svgEl("line", { x1: m.left, x2: m.left + pw, y1: ty, y2: ty, stroke: zero ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }, root);
+    svgEl("text", { x: m.left - 8, y: ty + 4, "text-anchor": "end", class: "tick" }, root)
+      .textContent = rank ? (t === 1 ? "#1" : String(t)) : signed(t, 2);
+  }
+  const every = narrow && n > 8 ? 2 : 1;
+  QB.seasons.forEach((s, i) => {
+    if ((n - 1 - i) % every) return;
+    svgEl("text", { x: x(i), y: H - 8, "text-anchor": "middle", class: "tick" }, root)
+      .textContent = (narrow ? "’" + s.slice(2) : s) + (QBS[s].partial ? "*" : "");
+  });
+
+  const cross = svgEl("line", { y1: m.top - 4, y2: m.top + ph + 4, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" }, root);
+  const picked = new Set(qbState.picks.map(p => p.id));
+  const context = svgEl("g", {}, root);
+  for (const q of QB.qbs) if (!picked.has(q.id)) drawLine(context, q, x, y, "var(--context)", 1, false);
+  const lifted = svgEl("g", {}, root);
+  const front = svgEl("g", {}, root);
+  const labels = [];
+  for (const p of qbState.picks) {
+    const q = QB.byId.get(p.id), color = `var(--series-${p.slot + 1})`;
+    drawLine(front, q, x, y, color, 2, true);
+    const end = q.pts[q.pts.length - 1];
+    labels.push({ text: lastName(q.name), x: x(end.i), y: y(end) });
+  }
+  placeLabels(front, labels, m.top + ph);
+
+  // One overlay drives the crosshair (snapped to the nearest season) and finds
+  // the line under the pointer, so nobody has to land on a 1px line.
+  const overlay = svgEl("rect", { x: 0, y: 0, width: W, height: H, fill: "transparent" }, root);
+  const tip = document.getElementById("qb-tip");
+  let hovered = null;
+
+  const lineAt = (px, py) => {
+    const f = (px - m.left) / step, i0 = Math.max(0, Math.min(n - 2, Math.floor(f))), t = Math.max(0, Math.min(1, f - i0));
+    let best = null, bestD = 10;
+    for (const q of QB.qbs) {
+      const a = q.at.get(i0), b = q.at.get(i0 + 1);
+      let yy = null;
+      if (a && b) yy = y(a) + (y(b) - y(a)) * t;
+      else if (a && t < 0.3) yy = y(a);
+      else if (b && t > 0.7) yy = y(b);
+      if (yy !== null && Math.abs(yy - py) < bestD) { bestD = Math.abs(yy - py); best = q; }
+    }
+    return best;
+  };
+
+  const row = (color, val, who) => {
+    const r = document.createElement("div");
+    r.className = "row";
+    const k = document.createElement("span");
+    k.className = "key";
+    k.style.background = color;
+    const v = document.createElement("span");
+    v.className = "val";
+    v.textContent = val;
+    const w = document.createElement("span");
+    w.className = "who";
+    w.textContent = who;
+    r.append(k, v, w);
+    return r;
+  };
+  const describe = (q, p) => rank ? [`#${p.rank}`, `${q.name} · ${p.team} · ${signed(p.rating, 3)}`]
+                                  : [signed(p.rating, 3), `${q.name} · ${p.team} · #${p.rank}`];
+
+  const show = (i, py) => {
+    qbState.at = i;
+    cross.setAttribute("x1", x(i));
+    cross.setAttribute("x2", x(i));
+    cross.setAttribute("visibility", "visible");
+    lifted.innerHTML = "";
+    if (hovered && !picked.has(hovered.id)) drawLine(lifted, hovered, x, y, "var(--context-hover)", 1.5, false);
+    const s = QB.seasons[i];
+    tip.innerHTML = "";
+    const when = document.createElement("div");
+    when.className = "when";
+    when.textContent = QBS[s].partial ? `${s} · through week ${QBS[s].through_week}` : s;
+    tip.appendChild(when);
+    let count = 0;
+    if (hovered && !picked.has(hovered.id) && hovered.at.get(i)) {
+      tip.appendChild(row("var(--context-hover)", ...describe(hovered, hovered.at.get(i))));
+      count++;
+    }
+    const here = qbState.picks.map(p => ({ p, q: QB.byId.get(p.id) })).filter(({ q }) => q.at.get(i))
+      .sort((a, b) => a.q.at.get(i).rank - b.q.at.get(i).rank);
+    for (const { p, q } of here) { tip.appendChild(row(`var(--series-${p.slot + 1})`, ...describe(q, q.at.get(i)))); count++; }
+    if (!count) {
+      const none = document.createElement("div");
+      none.className = "who";
+      none.textContent = "No highlighted quarterback ranked";
+      tip.appendChild(none);
+    }
+    tip.hidden = false;
+    const scale = host.getBoundingClientRect().width / W;
+    const left = x(i) * scale + 4, width = tip.offsetWidth, box = host.clientWidth;
+    tip.style.left = `${left + 14 + width > box ? left - 14 - width : left + 14}px`;
+    tip.style.top = `${8 + Math.max(4, Math.min(py * scale - 20, H * scale - tip.offsetHeight - 4))}px`;
+    overlay.style.cursor = hovered ? "pointer" : "default";
+  };
+  const hide = () => {
+    cross.setAttribute("visibility", "hidden");
+    lifted.innerHTML = "";
+    tip.hidden = true;
+    hovered = null;
+  };
+  const toLocal = e => {
+    const r = root.getBoundingClientRect();
+    return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height];
+  };
+
+  overlay.addEventListener("pointermove", e => {
+    const [px, py] = toLocal(e);
+    hovered = lineAt(px, py);
+    show(Math.max(0, Math.min(n - 1, Math.round((px - m.left) / step))), py);
+  });
+  overlay.addEventListener("pointerleave", hide);
+  overlay.addEventListener("click", e => {
+    const [px, py] = toLocal(e);
+    const q = lineAt(px, py);
+    if (q) togglePick(q.id);
+  });
+  // Keyboard: arrows walk the seasons with the same readout.
+  root.addEventListener("focus", () => { hovered = null; show(qbState.at ?? n - 1, m.top + ph / 3); });
+  root.addEventListener("blur", hide);
+  root.addEventListener("keydown", e => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    hovered = null;
+    show(Math.max(0, Math.min(n - 1, (qbState.at ?? n - 1) + (e.key === "ArrowLeft" ? -1 : 1))), m.top + ph / 3);
+  });
+}
+
+function renderQBTable() {
+  const head = document.getElementById("qb-table-head"), body = document.getElementById("qb-table-body");
+  head.innerHTML = "";
+  body.innerHTML = "";
+  const first = document.createElement("th");
+  first.className = "left";
+  first.textContent = "Season";
+  head.appendChild(first);
+  for (const p of qbState.picks) {
+    const th = document.createElement("th");
+    const key = document.createElement("span");
+    key.className = "key";
+    key.style.background = `var(--series-${p.slot + 1})`;
+    th.append(key, document.createTextNode(QB.byId.get(p.id).name));
+    head.appendChild(th);
+  }
+  [...QB.seasons].reverse().forEach(s => {
+    const i = QB.seasons.indexOf(s);
+    const tr = document.createElement("tr");
+    const td0 = document.createElement("td");
+    td0.className = "left";
+    td0.textContent = QBS[s].partial ? `${s} (through week ${QBS[s].through_week})` : s;
+    tr.appendChild(td0);
+    for (const p of qbState.picks) {
+      const pt = QB.byId.get(p.id).at.get(i);
+      const td = document.createElement("td");
+      if (pt) td.textContent = `#${pt.rank} · ${signed(pt.rating, 3)} · ${pt.team}`;
+      else { td.textContent = "—"; td.className = "none"; }
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  });
+}
+
+document.getElementById("search").addEventListener("input", e => { state.q = e.target.value; render(); });
+document.getElementById("confs").addEventListener("change", e => { state.conf = e.target.value; render(); });
+
+fetch("data.json").then(r => r.json()).then(d => {
+  DATA = d.seasons;
+  CONFS = d.conferences || {};
+  BENCH = d.benchmark || null;
+  QBS = d.qbs && Object.keys(d.qbs).length ? d.qbs : null;
+  const seasons = Object.keys(DATA).sort();
+  const saved = recall("season");
+  state.season = seasons.includes(saved) ? saved : seasons[seasons.length - 1];
+  const view = recall("view");
+  state.view = available().includes(view) ? view : "Ratings";
+  renderView();
+}).catch(() => {
+  document.getElementById("body").innerHTML =
+    '<tr><td class="left" colspan="13">Could not load data.json — run <code>uv run cfb/site/build.py</code> and serve this folder over HTTP.</td></tr>';
+});
+</script>
+</body>
+</html>
