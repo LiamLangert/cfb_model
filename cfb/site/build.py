@@ -17,6 +17,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parents[1]))
+from cfb.display import QB_SHARE, season_pass_level, with_pass_level  # noqa: E402
 from cfb.ratings import FCS, previous_ids  # noqa: E402
 
 DATA = ROOT.parents[1] / "data" / "cfb"
@@ -68,6 +69,10 @@ def ratings():
         # that cancel between teams (see cfb.ratings.centered).
         cols = [c for c in RATING_COLUMNS if c in table]
         table = table.assign(**{c: (table[c] - table[c].mean()).round(4) for c in cols})
+        # A share of each conference's average passing game is shown on its quarterbacks (cfb.display).
+        level = season_pass_level(path.parent)
+        if level is not None and "qb" in table:
+            table = with_pass_level(table.set_index("team"), level).round(4).reset_index()
         table["conference"] = table.team.map(conf).fillna("")
         table["power"] = (table.conference.isin(POWER) | table.team.isin(POWER_TEAMS)
                           | table.conference.map(POWER_UNTIL).ge(season))
@@ -83,6 +88,9 @@ def ratings():
 def quarterbacks():
     """Each season's qualified quarterbacks, ranked by rating against the average dropback.
 
+    The rating includes a share of his conference's average passing game
+    (cfb.display), so it compares across conferences.
+
     passer_id includes the team, so a quarterback who transfers gets a new
     one; career follows him across seasons the way his prior does
     (cfb.ratings.previous_ids).
@@ -95,12 +103,14 @@ def quarterbacks():
         games = pd.read_csv(path.parent / "games.csv")
         partial, through = progress(games)
         fbs = qbs[qbs.team != FCS]
-        ranked = fbs[fbs.dropbacks >= QB_QUALIFY * fbs.dropbacks.max()].sort_values("vs_average", ascending=False)
+        level = season_pass_level(path.parent)
+        fbs = fbs.assign(shown=fbs.vs_average + QB_SHARE * fbs.team.map(level).fillna(0.0))
+        ranked = fbs[fbs.dropbacks >= QB_QUALIFY * fbs.dropbacks.max()].sort_values("shown", ascending=False)
         seasons[path.parent.name] = {
             "partial": partial,
             "through_week": through,
             "rows": [{"id": season_career[q], "name": r["name"], "team": r.team, "dropbacks": int(r.dropbacks),
-                      "rating": round(float(r.vs_average), 4), "rank": k}
+                      "rating": round(float(r.shown), 4), "rank": k}
                      for k, (q, r) in enumerate(ranked.iterrows(), start=1)],
         }
         career, last = season_career, qbs

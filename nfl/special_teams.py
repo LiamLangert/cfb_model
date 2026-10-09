@@ -1,35 +1,21 @@
 """Special-teams ratings for the NFL: what each team's punt and kickoff units are worth, in points a game.
 
-RAPPA's scrimmage ratings only see runs and passes. This rates the kicking
-game the same way - a ridge fit on nflverse epa, opponent-adjusted, walked
-forward - and nfl.predict_games adds the gap between the two teams straight
-onto the predicted margin.
+The method is rappa.special_teams', shared with college - see there for how
+each kick is valued and how the units are rated - and nfl.predict_games
+adds the gap between the two teams straight onto the predicted margin. This
+module only reads nflverse's plays into the frame it takes, in CFBD's terms:
 
-    plays   every punt and kickoff, with epa credited to the kicking team
-            (nflverse credits a kickoff to the receiver, so those are
-            flipped) and clipped to +/-CLIP. Onside kicks are left out: the
-            score calls them, not how good a team is.
-    units   four per team - punt (punter and coverage), punt_return, kickoff
-            (kicker and coverage) and kick_return. Each play is the kicking
-            unit against the returning one, and punts and kickoffs get an
-            intercept each, since their average epa differs.
-    value   each unit's rating times how many plays a game a team's unit is
-            on the field for, summed: epa per game, which is points, so it
-            goes onto the margin at face value (WEIGHT).
+  - a kickoff's offence is the kicking team (nflverse gives the receiving
+    team the ball) and its yards to goal are the kicking team's, 100 less
+    nflverse's yardline_100
+  - nflverse's play types are mapped onto CFBD's names; a kick that a
+    penalty wiped out counts as a penalty, not a kick
+  - the score at each snap is nflverse's running total from the play before
 
-Every choice was made walking forward over 2015-2022 on top of the scrimmage
-model, and checked on 2023-2026:
-
-  - Punts carry almost all of it: -0.039 +/- 0.013 points of MAE on
-    2015-2022, and better in 10 of 11 seasons. Kickoffs add a little
-    (most were touchbacks before the 2024 rule change). Field goals and
-    extra points are left out: they added nothing on 2015-2022 and hurt on
-    2023-2026 - a kick's epa swings hard, and kicker accuracy does not hold
-    up well enough to predict.
-  - Fitting WEIGHT as a feature of the points conversion instead was worse:
-    it swung between 0.3 and 2.4 from season to season.
-  - Shrinking toward last season's ratings changed MAE by under 0.005, so
-    there is no prior and each season stands alone.
+Until 2026-10-06 a kick's value here was nflverse's own epa. Valued the
+college way instead, the NFL predicted as well: MAE +0.002 +/- 0.005 and
+log-loss +0.0004 +/- 0.0003 over 2015-2026 (rappa.special_teams has the
+rest), so both leagues now value kicks one way.
 
 `uv run -m nfl.special_teams <season>` prints a season's ratings.
 """
@@ -43,75 +29,67 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from rappa import special_teams as shared
+from rappa.special_teams import ALPHA, CLIP, UNITS, WEIGHT  # noqa: F401
+
 log = logging.getLogger(__name__)
 
-COLUMNS = ["game_id", "week", "posteam", "defteam", "epa", "desc", "kickoff_attempt", "punt_attempt"]
+# Only what the valuation needs; the full play-by-play file has 372 columns.
+COLUMNS = ["game_id", "play_id", "week", "qtr", "down", "yardline_100", "posteam", "defteam", "home_team",
+           "total_home_score", "total_away_score", "play_type", "desc", "kickoff_attempt", "punt_attempt"]
 
-UNITS = ("punt", "punt_return", "kickoff", "kick_return")
+# nflverse play types in CFBD's names, as rappa.special_teams reads them. A
+# missing play type is a timeout, quarter end or the like: not a snap.
+PLAY_TYPES = {"punt": "Punt", "kickoff": "Kickoff", "run": "Rush", "pass": "Pass Reception",
+              "field_goal": "Field Goal Good", "extra_point": "Extra Point Good", "no_play": "Penalty",
+              "qb_kneel": "Rush", "qb_spike": "Pass Incompletion"}
 
-# Ridge penalty. Ratings from a handful of punts are mostly noise, but
-# 100-1000 shrank the signal away; 10 did better still on 2015-2022 and lost
-# it on 2023-2026.
-ALPHA = 30.0
 
-# Each play's epa is clipped to +/-CLIP. Return touchdowns and blocked punts
-# reach +/-7; 2 predicted best, and a harder clip did better only on 2015-2022.
-CLIP = 2.0
+def plays_frame(raw, no_play_needs_penalty=False):
+    """nflverse play-by-play as rappa.special_teams.value_kicks takes it, and rappa.expected_points with it.
 
-# Points of margin per point of special-teams value gap - epa at face value.
-WEIGHT = 1.0
+    It carries each snap's distance (ydstogo, where raw has it) and row, raw's index for each row. With
+    no_play_needs_penalty, a no-play without a penalty (a review, a timeout logged as one) is not a snap, as
+    nfl.ratings' play values have it; special teams were measured without that.
+    """
+    raw = raw.sort_values(["game_id", "play_id"])
+    rows = raw.index.to_numpy()
+    raw = raw.reset_index(drop=True)
+    kick = raw.kickoff_attempt.eq(1) & raw.play_type.eq("kickoff")
+    punt = raw.punt_attempt.eq(1) & raw.play_type.eq("punt")
+    kind = raw.play_type.map(PLAY_TYPES).fillna("Timeout")
+    # A kick replayed after a penalty is flagged as an attempt with play type no_play.
+    wiped = (raw.kickoff_attempt.eq(1) & ~kick) | (raw.punt_attempt.eq(1) & ~punt)
+    kind = kind.where(~wiped, "Penalty")
+    if no_play_needs_penalty:
+        kind = kind.where(~(raw.play_type.eq("no_play") & raw.penalty.ne(1)), "Timeout")
+    # nflverse's totals are the score after the play; at the snap is the play before's.
+    home = raw.total_home_score.groupby(raw.game_id).cummax()
+    away = raw.total_away_score.groupby(raw.game_id).cummax()
+    pre = pd.DataFrame({"h": home, "a": away}).groupby(raw.game_id).shift(1).fillna(0)
+    plays = pd.DataFrame({
+        "game_id": raw.game_id, "week": raw.week.astype(float), "period": raw.qtr, "down": raw.down,
+        "offense": np.where(kick, raw.defteam, raw.posteam), "defense": np.where(kick, raw.posteam, raw.defteam),
+        "home": raw.home_team,
+        "yards_to_goal": np.where(kick, 100 - raw.yardline_100, raw.yardline_100),
+        "play_type": kind, "play_text": raw.desc.fillna(""),
+        "h": pre.h.to_numpy(), "a": pre.a.to_numpy(),
+        "distance": raw.ydstogo if "ydstogo" in raw else np.nan, "row": rows,
+    })
+    return plays[plays.offense.notna() | plays.play_type.eq("Timeout")].reset_index(drop=True)
 
 
 def load(season, out):
-    """One season's punts and kickoffs, from the kicking team's side."""
+    """One season's punts and kickoffs, from the kicking team's side, valued against their spot."""
     path = out / str(season) / "plays.csv"
     if not path.exists():
         raise SystemExit(f"{path} not found - run `uv run nfl/pull.py {season}` first")
-    raw = pd.read_csv(path, usecols=COLUMNS, low_memory=False)
-    kickoff, punt = raw.kickoff_attempt.eq(1), raw.punt_attempt.eq(1)
-    onside = raw.desc.str.contains("onside", case=False, na=False)
-    keep = (kickoff | punt) & ~onside & raw.epa.notna() & raw.posteam.notna() & raw.defteam.notna()
-    df, kickoff = raw[keep], kickoff[keep]
-    return pd.DataFrame({
-        "game_id": df.game_id,
-        "week": df.week.astype(float),
-        "kind": np.where(kickoff, "kickoff", "punt"),
-        "kicking": np.where(kickoff, df.defteam, df.posteam),
-        "receiving": np.where(kickoff, df.posteam, df.defteam),
-        "epa": np.where(kickoff, -df.epa, df.epa),
-    }).reset_index(drop=True)
+    return shared.value_kicks(plays_frame(pd.read_csv(path, usecols=COLUMNS, low_memory=False)))
 
 
-def fit(plays, alpha=ALPHA, clip=CLIP):
-    """Each team's four unit ratings (epa per play) and its value (epa per game).
-
-    Ridge with an unpenalised intercept per kind of play, solved in closed
-    form: there are only 4 x 32 + 1 columns.
-    """
-    teams = sorted(set(plays.kicking) | set(plays.receiving))
-    col = {t: i for i, t in enumerate(teams)}
-    n, p = len(plays), 4 * len(teams) + 1
-    punt = (plays.kind == "punt").to_numpy()
-    X = np.zeros((n, p))
-    rows = np.arange(n)
-    X[rows, plays.kicking.map(col).to_numpy() * 4 + np.where(punt, 0, 2)] = 1.0
-    X[rows, plays.receiving.map(col).to_numpy() * 4 + np.where(punt, 1, 3)] = -1.0
-    X[:, -1] = punt  # the punt intercept, on top of the kickoff one
-    y = plays.epa.clip(-clip, clip).to_numpy() if clip else plays.epa.to_numpy()
-
-    Xc, yc = X - X.mean(axis=0), y - y.mean()
-    penalty = np.full(p, alpha)
-    penalty[-1] = 0.0
-    coef = np.linalg.solve(Xc.T @ Xc + np.diag(penalty), Xc.T @ yc)
-    ratings = pd.DataFrame(coef[:-1].reshape(len(teams), 4), index=teams, columns=UNITS)
-
-    # How often a team's unit is on the field, per team-game in these plays.
-    team_games = len(pd.concat([plays[["game_id", "kicking"]].set_axis(["g", "t"], axis=1),
-                                plays[["game_id", "receiving"]].set_axis(["g", "t"], axis=1)]).drop_duplicates())
-    per_game = np.array([punt.sum(), punt.sum(), (~punt).sum(), (~punt).sum()]) / team_games
-    ratings["value"] = ratings[list(UNITS)].to_numpy() @ per_game
-    ratings.index.name = "team"
-    return ratings
+def fit(kicks, alpha=ALPHA, clip=CLIP):
+    """rappa.special_teams.fit, with the NFL constants as defaults."""
+    return shared.fit(kicks, alpha, clip)
 
 
 def parse_args(argv=None):
@@ -119,7 +97,7 @@ def parse_args(argv=None):
     p.add_argument("seasons", type=int, nargs="+", help="season(s) to rate, fitted separately")
     p.add_argument("--out", type=Path, default=Path("data/nfl"), help="data dir (default: data/nfl)")
     p.add_argument("--alpha", type=float, default=ALPHA, help=f"ridge penalty (default: {ALPHA:g})")
-    p.add_argument("--clip", type=float, default=CLIP, help=f"clip each play's epa (default: {CLIP:g}; 0 = off)")
+    p.add_argument("--clip", type=float, default=CLIP, help=f"clip each kick's value (default: {CLIP:g}; 0 = off)")
     return p.parse_args(argv)
 
 
@@ -127,10 +105,10 @@ def main(argv=None):
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     for season in args.seasons:
-        plays = load(season, args.out)
-        ratings = fit(plays, args.alpha, args.clip).sort_values("value", ascending=False)
-        print(f"\n{season} special teams: {len(plays)} punts and kickoffs. Units in epa per play, value in "
-              "epa (points) per game vs average:")
+        kicks = load(season, args.out)
+        ratings = fit(kicks, args.alpha, args.clip).sort_values("value", ascending=False)
+        print(f"\n{season} special teams: {len(kicks)} punts and kickoffs. Units in points per kick, value in "
+              "points per game vs average:")
         print(ratings.round(3).to_string())
     return 0
 

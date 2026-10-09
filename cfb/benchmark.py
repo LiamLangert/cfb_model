@@ -8,13 +8,19 @@ season_table do the scoring):
               a coin flip scores ln 2 = 0.693.
 
 RAPPA's margins are cfb.predict_games's, walked forward the same way,
-conferences, quarterbacks and special teams included unless
---no-conferences, --no-qbs or --no-special-teams is given. It has no win probability of its own, so it
-gets the usual normal one: P(home win) = Phi(predicted / sigma), where sigma
-is the sd of RAPPA's misses on every FBS-vs-FBS game it predicted before
-that week. ESPN's are its matchup predictor's espn_margin and espn_home_wp.
-The market's are the closing consensus spread, and the consensus moneylines
-with the vig taken out.
+conferences, offseason shifts, quarterbacks and special teams included
+unless --no-conferences, --no-offseason, --no-qbs or --no-special-teams is
+given. It has no win probability of its own, so it gets a normal one:
+P(home win) = Phi(predicted / sigma), where sigma is the one with the best
+log-loss on every FBS-vs-FBS game it predicted before that week
+(cfb.stage2.win_probability). ESPN's are
+its matchup predictor's espn_margin and espn_home_wp. The market's are one
+sportsbook's closing spread and moneylines, the vig taken out (games.csv's,
+picked by cfb.pull.book_lines). CFBD has moneylines only from 2021 (and not for every game since), so
+where there are none the market's win probability comes from its spread the
+way RAPPA's does: Phi(-spread / sigma), sigma the sd of the spread's misses
+on every earlier FBS-vs-FBS game. The table's market log-loss is then partly
+or (before 2021) wholly the spread's, and the run says how many games.
 
 Only FBS-vs-FBS games are graded - RAPPA rates every FCS opponent as one
 pooled team, so those games say little about it - and only those all three
@@ -25,7 +31,7 @@ graded season.
 
 Run cfb.pull and cfb.pull_espn for the seasons, and cfb.ratings for each
 season before one (its prior), first. Writes the table to
-<out>/benchmark.csv, which cfb/site/build.py puts on the site.
+<out>/benchmark.csv.
 """
 
 from __future__ import annotations
@@ -34,10 +40,13 @@ import argparse
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+from scipy import stats
 
 from cfb.predict_games import ALPHA, predict
-from nfl.benchmark import MODELS, market_wp, paired, season_table, win_probability
+from cfb.stage2 import win_probability
+from nfl.benchmark import MODELS, market_wp, paired, season_table
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +59,17 @@ def load_espn(seasons, out):
             raise SystemExit(f"{path} not found - run `uv run -m cfb.pull_espn {season}` first")
         frames.append(pd.read_csv(path, usecols=["game_id", "espn_margin", "espn_home_wp"]))
     return pd.concat(frames, ignore_index=True).rename(columns={"game_id": "id"})
+
+
+def spread_wp(preds, min_games):
+    """The market's home win probability from its closing spread, walked forward like RAPPA's."""
+    slot = preds.season * 100 + preds.week
+    miss = (preds.margin + preds.spread).dropna()
+    sigma = {}
+    for s in sorted(slot.unique()):
+        earlier = miss[slot[miss.index] < s]
+        sigma[s] = earlier.std() if len(earlier) >= min_games else np.nan
+    return stats.norm.cdf(-preds.spread / slot.map(sigma))
 
 
 def show(table, games):
@@ -92,6 +112,9 @@ def parse_args(argv=None):
     p.add_argument("--no-conferences", action="store_true",
                    help="rate teams without conference ratings (needs priors rated with cfb.ratings "
                         "--no-conferences)")
+    p.add_argument("--no-offseason", action="store_true",
+                   help="leave each prior unshifted by the offseason (needs priors rated with cfb.ratings "
+                        "--no-offseason)")
     p.add_argument("--save", type=Path, help="write every graded game here")
     return p.parse_args(argv)
 
@@ -109,24 +132,33 @@ def main(argv=None):
         log.warning("only %d of %d warm-up seasons on disk - the first graded weeks may be missing",
                     len(warmup), args.warmup)
     preds = predict(warmup + seasons, args.out, 2, args.alpha, args.prior_weight, True,
-                    not args.no_special_teams, not args.no_qbs, args.min_train, not args.no_conferences)
+                    not args.no_special_teams, not args.no_qbs, args.min_train, not args.no_conferences,
+                    not args.no_offseason)
     preds = win_probability(preds[preds.fbs].reset_index(drop=True), args.min_train)
+    preds = preds.assign(spread_wp=spread_wp(preds, args.min_train))
 
     games = preds[preds.season.isin(seasons) & preds.margin.notna()]
     games = games.merge(load_espn(seasons, args.out), on="id", how="left")
-    games = games.assign(spread_line=-games.spread, market_wp=market_wp(games), week=games.week.astype(int))
+    moneyline = market_wp(games)
+    games = games.assign(spread_line=-games.spread, market_wp=np.where(np.isnan(moneyline), games.spread_wp, moneyline),
+                         week=games.week.astype(int))
+    from_spread = np.isnan(moneyline) & games.spread_wp.notna()
     need = [col for pair in MODELS.values() for col in pair]
     missing = games[need].isna().any(axis=1)
     if missing.any():
         log.warning("%d games lack a projection from one of the three - left out (%s)", missing.sum(),
                     ", ".join(f"{s}: {n}" for s, n in games[missing].groupby("season").size().items()))
-    games = games[~missing]
+    games, from_spread = games[~missing], from_spread[~missing.to_numpy()]
 
     table = season_table(games)
     show(table, games)
+    if from_spread.any():
+        counts = games[from_spread].groupby("season").size()
+        print("\nmarket win probability from the spread (no moneylines) for "
+              + ", ".join(f"{s}: {n} of {(games.season == s).sum()}" for s, n in counts.items()))
     dest = args.out / "benchmark.csv"
     table.to_csv(dest, index=False)
-    log.info("wrote %s - rebuild the site with `uv run cfb/site/build.py`", dest)
+    log.info("wrote %s", dest)
 
     if args.save:
         cols = ["season", "week", "id", "home_team", "away_team", "margin", *need]

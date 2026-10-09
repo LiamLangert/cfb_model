@@ -7,8 +7,9 @@ Writes CSVs under <out>/<season>/ (default data/cfb/<season>/) so the data only
 has to be fetched once. Re-running skips anything already on disk unless
 --force is passed.
 
-games.csv carries the consensus betting line merged in, one row per game.
-The per-sportsbook lines are kept alongside it in lines.csv.
+games.csv carries one sportsbook's betting line merged in, one row per game
+(book_lines: which book, in its book column). The per-sportsbook lines are
+kept alongside it in lines.csv.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from dotenv import load_dotenv
 log = logging.getLogger(__name__)
 
 SEASON_TYPES = ("regular", "postseason", "both")
-# "games" writes games.csv (with the consensus line merged in) and lines.csv.
+# "games" writes games.csv (with one book's line merged in) and lines.csv.
 DATASETS = ("games", "plays")
 OUTPUTS = ("games", "lines", "plays")
 
@@ -44,7 +45,7 @@ MODEL_COLS = (
     "away_postgame_win_probability",
 )
 
-# Numbers medianed across sportsbooks to form the consensus.
+# The numbers taken from a game's book.
 LINE_COLS = (
     "spread",
     "spread_open",
@@ -152,20 +153,37 @@ def fetch_lines(betting_api, season, season_type, game_ids, provider):
     return pd.DataFrame(rows)
 
 
-def consensus_lines(lines_df):
-    """Collapse the per-sportsbook lines to one consensus row per game.
+# The sportsbooks a game's line is taken from, in order. Books differ by little
+# (arbitrage keeps them close), but a blend of them is not a line any book
+# posted: a median of two books is their average, and two moneylines either
+# side of -100/+100 average to nonsense (-108 and +105 make -1.5). So each game
+# takes every number from one book. No book covers every season - CFBD has
+# moneylines only from 2021, from Bovada alone until 2023 - so this is an
+# order, not a single book. Bovada runs from 2019 to now and, on the games
+# both priced, matched DraftKings and ESPN Bet's accuracy (MAE within 0.01 in
+# 2024-2026) and beat DraftKings by 0.09 in 2023. Before 2019 there are only
+# line sites: teamrankings and numberfire, and CFBD's own "consensus", which in
+# 2014-2016 missed margins by 0.2 more than they did on the same games and
+# differed from them by 3 or more points in a quarter of games.
+BOOKS = ("Bovada", "DraftKings", "ESPN Bet", "William Hill (New Jersey)", "Caesars", "Caesars Sportsbook (Colorado)",
+         "Caesars (Pennsylvania)", "SugarHouse", "teamrankings", "numberfire", "consensus")
 
-    Uses the median so each figure stays a number a book actually posted -
-    averaging American moneylines across the -100/+100 boundary would not.
-    """
-    if lines_df.empty:
+
+def book_lines(lines_df):
+    """Each game's line from one sportsbook: the first in BOOKS with a spread and both moneylines, else the first
+    with a spread (a book not in BOOKS comes after them all). Its name is in the book column."""
+    if lines_df.empty or "spread" not in lines_df:
         return pd.DataFrame()
     cols = [c for c in LINE_COLS if c in lines_df.columns]
-    grouped = lines_df.groupby("game_id")
-    consensus = grouped[cols].median().reset_index()
-    consensus["n_books"] = grouped["provider"].nunique().values
-    log.info("consensus: %d games with a line", len(consensus))
-    return consensus
+    df = lines_df.dropna(subset=["spread"])
+    rank = df.provider.map({b: i for i, b in enumerate(BOOKS)}).fillna(len(BOOKS))
+    priced = df.reindex(columns=["home_moneyline", "away_moneyline"]).notna().all(axis=1)
+    best = (df.assign(_unpriced=~priced, _rank=rank)
+            .sort_values(["game_id", "_unpriced", "_rank"], kind="stable")
+            .drop_duplicates("game_id"))
+    out = best[["game_id", *cols]].assign(book=best.provider.to_numpy()).reset_index(drop=True)
+    log.info("lines: %d games, from %s", len(out), out.book.value_counts().to_dict())
+    return out
 
 
 def fetch_plays(plays_api, season, plan, classification, parts_dir, force, pause):
@@ -267,12 +285,11 @@ def main(argv=None):
             )
             write(lines_df, paths["lines"], "lines")
 
-            consensus = consensus_lines(lines_df)
-            if not consensus.empty:
+            chosen = book_lines(lines_df)
+            if not chosen.empty:
                 games_df = games_df.merge(
-                    consensus, how="left", left_on="id", right_on="game_id"
+                    chosen, how="left", left_on="id", right_on="game_id"
                 ).drop(columns=["game_id"])
-                games_df["n_books"] = games_df["n_books"].fillna(0).astype(int)
             else:
                 log.warning("no betting lines returned; games.csv has no line columns")
             write(games_df, paths["games"], "games")

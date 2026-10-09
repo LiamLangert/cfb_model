@@ -19,7 +19,9 @@ play he is the passer on, so a pass play is the offence's pass unit plus its
 passer against the defence's pass unit. The team's pass_off is then what the
 rest of the offence adds, and a quarterback's rating goes with him when he
 changes teams. The passers share the teams' penalty; their prior is set by
-the caller.
+the caller. If the loader marks a quarterback's designed runs (qb_runner),
+his column is +1 on those rush plays too, so a running quarterback's legs go
+with him rather than staying in the team's rush_off.
 
 Groups (college conferences, see Groups) optionally add four shared columns
 per group, so a team's rating is its group's part plus its own:
@@ -50,6 +52,8 @@ Each league's loader hands over one row per play with these columns:
     period, margin       for garbage_time: quarter, and the offence's lead at the snap
     conference_game      for conference_home_edge
     passer               for fit_passers: an id for the passer on pass plays, else missing
+    qb_runner            optional, for fit_passers: on a quarterback's designed run, his
+                         passer id, else missing
 """
 
 from __future__ import annotations
@@ -121,7 +125,8 @@ def build_design(df, teams, passers=()):
     """Sparse design matrix: one offence and one defence entry per play.
 
     With passers, one more column each after the teams', +1 on the pass plays
-    whose df.passer it is.
+    whose df.passer it is, and on the rush plays whose df.qb_runner it is if
+    df has that column.
     """
     # Four consecutive columns per team, one per unit.
     index = {(team, unit): 4 * i + unit for i, team in enumerate(teams) for unit in range(4)}
@@ -142,7 +147,10 @@ def build_design(df, teams, passers=()):
     width = 4 * len(teams)
     if len(passers):
         column = {p: width + j for j, p in enumerate(passers)}
-        passer_col = df.passer.where(~is_rush).map(column).to_numpy(dtype=float)
+        who = df.passer.where(~is_rush)
+        if "qb_runner" in df:
+            who = who.fillna(df.qb_runner.where(is_rush))
+        passer_col = who.map(column).to_numpy(dtype=float)
         has = ~np.isnan(passer_col)
         rows = np.r_[rows, np.flatnonzero(has)]
         cols = np.r_[cols, passer_col[has].astype(int)]
@@ -288,7 +296,8 @@ def fit_passers(df, alpha=None, *, hfa, clip, prior=None, prior_weight, half_lif
     weighted by the caller; a passer missing from it is shrunk toward
     passer_default. groups is as for fit. Returns the team ratings, the
     passer ratings (a Series, epa per pass play on top of the team's
-    pass_off), the penalty and the intercept.
+    pass_off, and per designed run on top of its rush_off where df has
+    qb_runner), the penalty and the intercept.
     """
     passers = sorted(df.passer[df.play_kind != "rush"].dropna().unique())
     means = pd.Series(passer_default, index=passers, dtype=float)
@@ -365,7 +374,8 @@ def summarize(ratings, df, passers=None):
     """Add play counts and league-mix composites.
 
     With passer ratings from fit_passers, qb is each offence's passers'
-    rating weighted by its pass plays in df, and off counts it with pass_off.
+    rating weighted by its pass plays in df, and off counts it with pass_off,
+    and on the league's share of designed quarterback runs if df has qb_runner.
     """
     rush_share = float((df.play_kind == "rush").mean())
     pass_off = ratings.pass_off
@@ -377,6 +387,8 @@ def summarize(ratings, df, passers=None):
     # Blend each team's rush and pass ratings at the league play mix so the
     # composite does not reward a team simply for being pass-heavy.
     ratings["off"] = rush_share * ratings.rush_off + (1 - rush_share) * pass_off
+    if passers is not None and "qb_runner" in df:
+        ratings["off"] += df.qb_runner.notna().mean() * ratings.qb
     ratings["def"] = rush_share * ratings.rush_def + (1 - rush_share) * ratings.pass_def
     ratings["net"] = ratings["off"] + ratings["def"]
     ratings["plays_off"] = df.offense.value_counts().reindex(ratings.index).fillna(0).astype(int)

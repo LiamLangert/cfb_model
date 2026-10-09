@@ -4,19 +4,23 @@ The NFL counterpart of cfb.predict_games, with the same two stages, both
 walked forward so nothing is fitted on a game it predicts:
 
   stage 1  For each week W, fit RAPPA on the season's plays from every week
-           before W, shrunk toward last season's ratings when they exist.
+           before W, shrunk toward last season's ratings when they exist,
+           shifted early in the season by how much of each lineup returns
+           (nfl.offseason).
   stage 2  A regression maps the two rating edges onto a final margin and
            picks up home field, in points, as its intercept.
 
-Stage 1 rates quarterbacks on their own (nfl.ratings.fit_qbs), and each
-side's pass offence in a game is its supporting cast plus the quarterback who
-starts it: the listed starter, or for a game not yet played without one, the
-team's most recent starter. A starter who has not thrown yet this season
-counts at his prior - last season's rating carried over, or replacement level.
+Stage 1 rates quarterbacks on their own (nfl.ratings.fit_qbs), on their
+dropbacks and designed runs, and each side's offence in a game is its
+supporting cast plus the quarterback who starts it: the listed starter, or
+for a game not yet played without one, the team's most recent starter. A
+starter who has not played yet this season counts at his prior - last
+season's rating carried over, or replacement level.
 
-Special teams are rated alongside stage 1 from the season's punts and
-kickoffs (nfl.special_teams), and the gap between the two teams goes onto
-the margin at face value; stage 2 is fitted on what is left.
+Two things go onto the margin at face value, and stage 2 is fitted on what
+is left: the special-teams gap, rated alongside stage 1 from the season's
+punts and kickoffs (nfl.special_teams), and the rest gap at the market's
+price (REST_WEIGHT).
 
 Where it differs from the college version:
 
@@ -40,10 +44,10 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from nfl import special_teams
-from nfl.ratings import GARBAGE, QB_REPLACEMENT, centered, fit, fit_qbs, load, qb_prior_means
+from nfl import offseason, special_teams
+from nfl.ratings import QB_REPLACEMENT, centered, fit, fit_qbs, in_fit, load, qb_prior_means, with_qb_runs
 from rappa.games import FEATURES, add_edges, against_the_spread, score
-from rappa.model import garbage_time, summarize
+from rappa.model import summarize
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +58,19 @@ EDGES = (0.0, 1.5, 3.0, 5.0)
 # in almost every NFL fit, but walked forward on game margins over 2015-2022,
 # 500 predicted better (see nfl.ratings for the other constants tuned there).
 ALPHA = 500.0
+
+# Points of home margin per day of rest the home team has over the away team
+# (games.csv home_rest - away_rest), clipped to REST_CLIP days either way.
+# The results are too noisy to learn it from: home teams on two or more days
+# less rest fell short of RAPPA by 2.8, -0.6 and 3.2 points in 2015-2018,
+# 2019-2022 and 2023-2026, each +/- about 1.1, and as a feature of stage 2 it
+# predicted worse. 0.15 is what the closing line prices it at, measured by
+# regressing RAPPA's disagreement with the line on it, and fixed at that it
+# cut MAE by 0.008 +/- 0.007 and log-loss by 0.0005 +/- 0.0004 over
+# 2015-2026, in both halves (see nfl.ratings.PENALTIES for the changes it
+# came in with).
+REST_WEIGHT = 0.15
+REST_CLIP = 7
 
 # nflverse play-by-play gives every season today's abbreviations, but its
 # schedules keep the old ones (STL to 2015, SD to 2016, OAK to 2019), so
@@ -94,11 +111,15 @@ def starters(games):
     return wide.home.reindex(games.game_id).to_numpy(), wide.away.reindex(games.game_id).to_numpy()
 
 
-def qb_edges(slate, ratings, rush_share, qb_rating):
-    """rappa.games.add_edges, with each side's pass offence its cast plus its starter."""
+def qb_edges(slate, ratings, rush_share, qb_rating, run_share=0.0):
+    """rappa.games.add_edges, with each side's pass offence its cast plus its starter.
+
+    run_share is the share of plays that are quarterbacks' designed runs, when
+    those are on the quarterback's rating: his rating then counts on them too.
+    """
     def offence(team, qb):
         r = ratings.reindex(team)
-        return (rush_share * r.rush_off + (1 - rush_share) * (r.pass_off + qb)).to_numpy()
+        return (rush_share * r.rush_off + (1 - rush_share) * (r.pass_off + qb) + run_share * qb).to_numpy()
     home_off = offence(slate.home_team, qb_rating(slate.home_qb))
     away_off = offence(slate.away_team, qb_rating(slate.away_qb))
     return slate.assign(
@@ -109,14 +130,16 @@ def qb_edges(slate, ratings, rush_share, qb_rating):
 
 
 def season_features(season, out, start_week, alpha, prior_weight, use_prior, use_special_teams=True,
-                    use_qbs=True):
+                    use_qbs=True, use_rest=True, use_offseason=True):
     """One row per game, using only ratings that predate it.
 
     Covers every week that has been played, plus the one after it. prior_weight
-    is as nfl.ratings.fit takes it (None for its defaults).
+    is as nfl.ratings.fit takes it (None for its defaults). use_offseason
+    shifts the prior by nfl.offseason's returning snaps, fading by week.
     """
-    plays, games = load(season, out), load_games(season, out)
-    plays = plays[~garbage_time(plays, GARBAGE)]
+    plays, games = in_fit(load(season, out)), load_games(season, out)
+    if use_rest:
+        games["rest_edge"] = (games.home_rest - games.away_rest).clip(-REST_CLIP, REST_CLIP).fillna(0.0)
     kicks = special_teams.load(season, out) if use_special_teams else None
     prior_path = out / str(season - 1) / "rappa.csv"
     prior = qb_prior = None
@@ -130,6 +153,7 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
             log.warning("%d: no %s, every quarterback starts at replacement level", season, qb_path)
     elif use_prior:
         log.warning("%d: no %s, fitting without a prior", season, prior_path)
+    shift = offseason.prior_shift(season, out) if prior is not None and use_offseason else None
     if use_qbs:
         games["home_qb"], games["away_qb"] = starters(games)
         start_at = qb_prior_means(qb_prior)
@@ -143,7 +167,9 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
             continue
         slate = games[games.week == week]
         if use_qbs:
-            ratings, qbs, _, _ = fit_qbs(before, alpha, prior=prior, qb_prior=qb_prior, prior_weight=prior_weight)
+            before = with_qb_runs(before)
+            ratings, qbs, _, _ = fit_qbs(before, alpha, prior=prior, qb_prior=qb_prior, prior_weight=prior_weight,
+                                         shift=offseason.faded(shift, week))
             ratings = summarize(ratings, before, qbs)
             if start_at is not None:
                 qbs = pd.concat([qbs, start_at[~start_at.index.isin(qbs.index)]])
@@ -155,9 +181,11 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
             def qb_rating(ids):
                 return ids.map(qbs).fillna(QB_REPLACEMENT).to_numpy() - level
 
-            slate = qb_edges(slate, centered(ratings), float((before.play_kind == "rush").mean()), qb_rating)
+            slate = qb_edges(slate, centered(ratings), float((before.play_kind == "rush").mean()), qb_rating,
+                             float(before.qb_runner.notna().mean()))
         else:
-            ratings, _, _ = fit(before, alpha, prior=prior, prior_weight=prior_weight)
+            ratings, _, _ = fit(before, alpha, prior=prior, prior_weight=prior_weight,
+                                shift=offseason.faded(shift, week))
             ratings = summarize(ratings, before)
             slate = add_edges(slate, ratings)
         if kicks is not None:
@@ -172,11 +200,13 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
 def walk_forward_predict(rows, min_train):
     """Fit the points conversion on every game played before this week, predict the week.
 
-    Special teams, when rows has them, go onto the margin at face value, so the
-    conversion is fitted on what they leave.
+    Special teams and rest, when rows has them, go onto the margin at face
+    value, so the conversion is fitted on what they leave.
     """
-    st = rows.st_edge * special_teams.WEIGHT if "st_edge" in rows else 0.0
-    rows = rows.assign(slot=rows.season * 100 + rows.week, st_points=st)
+    face = rows.st_edge * special_teams.WEIGHT if "st_edge" in rows else 0.0
+    if "rest_edge" in rows:
+        face = face + REST_WEIGHT * rows.rest_edge
+    rows = rows.assign(slot=rows.season * 100 + rows.week, face_points=face)
     played = rows[rows.margin.notna()]
     preds = []
     for slot in sorted(rows.slot.unique()):
@@ -184,14 +214,14 @@ def walk_forward_predict(rows, min_train):
         if len(train) < min_train:
             continue
         test = rows[rows.slot == slot].copy()
-        model = LinearRegression().fit(train[FEATURES], train.margin - train.st_points)
-        test["predicted"] = model.predict(test[FEATURES]) + test.st_points
+        model = LinearRegression().fit(train[FEATURES], train.margin - train.face_points)
+        test["predicted"] = model.predict(test[FEATURES]) + test.face_points
         test["hfa"] = model.intercept_
         test["n_train"] = len(train)
         preds.append(test)
     if not preds:
         raise SystemExit(f"never had {min_train} games to train on - lower --min-train or add a season")
-    return pd.concat(preds, ignore_index=True).drop(columns=["slot", "st_points"])
+    return pd.concat(preds, ignore_index=True).drop(columns=["slot", "face_points"])
 
 
 def report(preds):
@@ -246,8 +276,10 @@ def parse_args(argv=None):
     p.add_argument("--prior-weight", type=float,
                    help="carry this much of last season for every unit (default: nfl.ratings's, by side)")
     p.add_argument("--no-prior", action="store_true", help="fit every season from scratch")
+    p.add_argument("--no-offseason", action="store_true", help="leave the prior unshifted by returning snaps")
     p.add_argument("--no-special-teams", action="store_true", help="leave special teams out of the margin")
     p.add_argument("--no-qbs", action="store_true", help="leave quarterbacks in their teams' pass offence")
+    p.add_argument("--no-rest", action="store_true", help="leave the rest gap out of the margin")
     p.add_argument("--save", type=Path, help="write per-game predictions, upcoming included, here")
     return p.parse_args(argv)
 
@@ -260,7 +292,7 @@ def main(argv=None):
 
     rows = pd.concat([
         season_features(s, args.out, args.start_week, args.alpha, args.prior_weight, not args.no_prior,
-                        not args.no_special_teams, not args.no_qbs)
+                        not args.no_special_teams, not args.no_qbs, not args.no_rest, not args.no_offseason)
         for s in sorted(args.seasons)
     ], ignore_index=True)
     preds = walk_forward_predict(rows, args.min_train)

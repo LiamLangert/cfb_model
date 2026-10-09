@@ -19,6 +19,11 @@ positive when the home team is favoured, so it lines up with -spread in the
 college data. Weeks run straight through the playoffs instead of restarting.
 
 plays.csv is nflverse play-by-play. epa is the counterpart of CFBD's ppa.
+
+snaps.csv is each player's offensive, defensive and special-teams snaps in
+each game (from 2012), and roster_week1.csv every team's roster in the first
+week of the regular season. nfl.offseason measures from them how much of
+each lineup returns.
 """
 
 from __future__ import annotations
@@ -29,20 +34,30 @@ from pathlib import Path
 
 try:
     import nflreadpy as nfl
+    import polars as pl
 except ImportError:
     raise SystemExit("nflreadpy not found - run this as `uv run nfl/pull.py`, not with -m or plain python")
 
 log = logging.getLogger(__name__)
 
-DATASETS = ("games", "plays")
+DATASETS = ("games", "plays", "snaps", "rosters")
+FILES = {"games": "games.csv", "plays": "plays.csv", "snaps": "snaps.csv", "rosters": "roster_week1.csv"}
 
-# The first season nflverse has play-by-play for.
+# The first season nflverse has play-by-play for, and the first it has the others for where that is later.
 FIRST_SEASON = 1999
+FIRST = {"snaps": 2012, "rosters": 2002}
 
 
 def fetch(dataset, season):
     if dataset == "games":
         return nfl.load_schedules([season])
+    if dataset == "snaps":
+        return nfl.load_snap_counts([season])
+    if dataset == "rosters":
+        rosters = nfl.load_rosters_weekly([season])
+        if "game_type" in rosters.columns:
+            rosters = rosters.filter((pl.col("game_type") == "REG") | pl.col("game_type").is_null())
+        return rosters.filter(pl.col("week") == pl.col("week").min().over("team"))
     return nfl.load_pbp([season])
 
 
@@ -73,7 +88,10 @@ def main(argv=None):
     for season in args.seasons:
         season_dir = args.out / str(season)
         for dataset in args.datasets:
-            path = season_dir / f"{dataset}.csv"
+            if season < FIRST.get(dataset, FIRST_SEASON):
+                log.info("%d %s: nflverse has none before %d, skipping", season, dataset, FIRST[dataset])
+                continue
+            path = season_dir / FILES[dataset]
             if path.exists() and not args.force:
                 log.info("%d %s: %s already exists, skipping (--force to refetch)", season, dataset, path)
                 continue

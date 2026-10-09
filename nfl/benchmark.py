@@ -8,9 +8,10 @@ directly:
               a coin flip scores ln 2 = 0.693.
 
 RAPPA's margins are nfl.predict_games's, walked forward the same way,
-quarterbacks and special teams included unless --no-qbs or
---no-special-teams is given. Games are predicted with the quarterback who
-actually started them, which is known before kickoff. It has
+quarterbacks, special teams, rest and the returning-snap shifts of the
+prior (nfl.offseason) included unless --no-qbs, --no-special-teams, --no-rest
+or --no-offseason is given. Games are predicted with the
+quarterback who actually started them, which is known before kickoff. It has
 no win probability of its own, so it gets the usual normal one: P(home win)
 = Phi(predicted / sigma), where sigma is the sd of RAPPA's misses on every
 game it predicted before that week, so that is walked forward too. ESPN's
@@ -25,8 +26,7 @@ given are fitted but not graded, so the points conversion already has its
 
 ESPN's projections start in 2015. Run nfl/pull.py and nfl.pull_espn for the
 seasons, and nfl.ratings for each season before one (its prior), first.
-Writes the table to <out>/benchmark.csv, which nfl/site/build.py puts on the
-site.
+Writes the table to <out>/benchmark.csv.
 """
 
 from __future__ import annotations
@@ -149,6 +149,8 @@ def parse_args(argv=None):
     p.add_argument("--prior-weight", type=float, help="one weight for every unit (default: nfl.ratings's, by side)")
     p.add_argument("--no-special-teams", action="store_true", help="leave special teams out of RAPPA's margin")
     p.add_argument("--no-qbs", action="store_true", help="leave quarterbacks in their teams' pass offence")
+    p.add_argument("--no-rest", action="store_true", help="leave the rest gap out of RAPPA's margin")
+    p.add_argument("--no-offseason", action="store_true", help="leave the prior unshifted by returning snaps")
     p.add_argument("--save", type=Path, help="write every graded game here")
     return p.parse_args(argv)
 
@@ -167,7 +169,7 @@ def main(argv=None):
                     len(warmup), args.warmup)
     rows = pd.concat([
         season_features(s, args.out, 2, args.alpha, args.prior_weight, True, not args.no_special_teams,
-                        not args.no_qbs)
+                        not args.no_qbs, not args.no_rest, not args.no_offseason)
         for s in warmup + seasons
     ], ignore_index=True)
     preds = win_probability(walk_forward_predict(rows, args.min_train), args.min_train)
@@ -186,7 +188,7 @@ def main(argv=None):
     show(table, games)
     dest = args.out / "benchmark.csv"
     table.to_csv(dest, index=False)
-    log.info("wrote %s - rebuild the site with `uv run nfl/site/build.py`", dest)
+    log.info("wrote %s", dest)
 
     if args.save:
         cols = ["season", "week", "game_id", "home_team", "away_team", "margin", *need]

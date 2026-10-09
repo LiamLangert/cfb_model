@@ -107,7 +107,7 @@
 <body>
 <header>
   <h1>College RAPPA Ratings</h1>
-  <div class="sub">Regularized Adjusted Predicted Points Added: opponent-adjusted PPA per play from a ridge regression on CFBD play-by-play, for every FBS team. Positive is better for every column, including defense.</div>
+  <div class="sub">Regularized Adjusted Predicted Points Added: opponent-adjusted PPA per play from a ridge regression on play-by-play data, for every FBS team. Positive is better for every column, including defense.</div>
 </header>
 
 <div class="controls">
@@ -190,7 +190,7 @@
       <tbody id="body"></tbody>
     </table>
   </div>
-  <div class="legend">Click any column to sort; click again to reverse. Quarterbacks are rated on their own: offense Pass is the rest of the passing game, and QB is the team's passers' rating weighted by their dropbacks. Composites blend rush and pass (with QB) at the league play mix; net = off + def. Ratings are neutral-site PPA per play vs the average FBS team, from each season's full fit, shrunk toward the season before. Every FCS opponent is rated as one pooled team, which is not shown. Power conferences are the SEC, Big Ten, Big 12 and ACC, the Pac-12 through 2023, and Notre Dame.</div>
+  <div class="legend">Click any column to sort; click again to reverse. Quarterbacks are rated on their own: QB is the team's passers' rating weighted by their dropbacks, with a quarter of its conference's average passing game counted on them (what transferring quarterbacks carry with them), and offense Pass is the rest of the passing game, the other three quarters included, so both compare across conferences. Composites blend rush and pass (with QB) at the league play mix; net = off + def. Ratings are neutral-site PPA per play vs the average FBS team, from each season's full fit, shrunk toward the season before. Every FCS opponent is rated as one pooled team, which is not shown. Power conferences are the SEC, Big Ten, Big 12 and ACC, the Pac-12 through 2023, and Notre Dame.</div>
 </div>
 
 <script>
@@ -493,7 +493,9 @@ function renderQBs() {
   const top = QBS[QB.latest].rows[0];
   document.getElementById("qb-intro").textContent =
     "Each season's FBS quarterbacks ranked by RAPPA's quarterback rating: the PPA per dropback a passer adds on top of " +
-    `his team's supporting cast, against the average dropback. ${top.name} led ${QB.latest} at ${signed(top.rating, 3)}.`;
+    "his team's supporting cast, against the average dropback. A quarter of his conference's average passing game is counted on him, " +
+    "so quarterbacks compare across conferences. " +
+    `${top.name} led ${QB.latest} at ${signed(top.rating, 3)}.`;
   const current = QB.seasons.filter(s => QBS[s].partial);
   document.getElementById("qb-notes").textContent =
     "Gray lines are every other ranked quarterback — hover one to see who it is, click it to highlight it (up to four). " +

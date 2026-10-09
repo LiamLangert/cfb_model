@@ -4,13 +4,17 @@ The model is in rappa/model.py - see there for how it works. This module gets
 CFBD's plays into the shape it expects and holds the constants measured on
 college data:
 
-    target      CFBD's ppa
+    target      each play's value in our own expected points (OWN_EP below,
+                rappa.expected_points); CFBD's ppa where a play has no next
+                snap in its half
     plays       rushes and passes, read off CFBD's play types (see classify);
                 kneels and spikes are dropped
     FCS         every non-FBS opponent is pooled into one team (see pool_fcs)
     home field  HFA below, held fixed - about five times the NFL's
     garbage     GARBAGE below
     clip        CLIP below
+    offseason   each team's prior is shifted by its recruiting, returning
+                production and coaching change (cfb.offseason)
     conferences every conference gets a shared rating of its own
                 (rappa.model.Groups, CONF_ constants below), so a team is its
                 conference's part plus its own; see conferences
@@ -21,7 +25,8 @@ college data:
                 constants below), so a team's pass_off is its supporting cast.
                 CFBD has no player ids, so passers are read off the play text
                 (see passer_key) and a quarterback who transfers is followed
-                by name (see qb_prior_means).
+                by name (see qb_prior_means). A quarterback's carries count
+                as his dropbacks (qb_carries_as_dropbacks).
 
 Run `uv run -m cfb.pull <season>` first. Writes <out>/<season>/rappa.csv
 (default data/cfb/<season>/rappa.csv), one row per team, and qbs.csv next to
@@ -39,13 +44,23 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from rappa import model
+from cfb.offseason import prior_shift
+from rappa import expected_points, model
 from rappa.model import GARBAGE_RULES, UNITS, Groups, conference_home_edge, garbage_time, summarize
 
 log = logging.getLogger(__name__)
 
 # Chronological play order within a game.
 ORDER = ["game_id", "drive_number", "play_number"]
+
+# Each play's value is measured in our own expected points (rappa.expected_points: the season's own
+# next-score curve by down, distance and yards to goal), not taken from CFBD's ppa, so that a game's play
+# values add up to its points. Walked forward over 2015-2026 with the chain re-rated, this cut MAE by
+# 0.061 +/- 0.023 and log-loss by 0.0014 +/- 0.0010, better in 10 of 12 seasons (2026-10-06). CFBD's ppa
+# charges about half a point more for a turnover, values third and fourth downs differently, and sums to
+# a different margin than the scoreboard. The plays fitted are the same either way; a play with no snap
+# after it in its half keeps CFBD's ppa. False rates on CFBD's ppa.
+OWN_EP = True
 
 # Play types that are unambiguously one or the other.
 RUSH_TYPES = {"Rush", "Rushing Touchdown"}
@@ -93,9 +108,10 @@ HFA = 0.016
 # changed less than 0.03 anywhere near their optimum.
 
 # Plays by a team leading by at least this much are dropped
-# (rappa.model.GARBAGE_RULES). Unlike in the NFL, no rule helped on game
-# margins: flat21, the NFL's, cost 0.13-0.20 points of MAE, and the rest
-# 0.03-0.11, bar q4_21, which was level.
+# (rappa.model.GARBAGE_RULES). No rule helped on game margins: flat21, which
+# the NFL used until 2026-10-07, cost 0.13-0.20 points of MAE, and the rest
+# 0.03-0.11, bar q4_21, which was level. The NFL now follows college here and
+# in CLIP (see nfl.ratings).
 GARBAGE = "none"
 
 # Each play's PPA is clipped to +/-CLIP before fitting. Pick-sixes and fumble
@@ -138,6 +154,24 @@ QB_REPLACEMENT = -0.2
 # there too.
 PASS_PRIOR_WEIGHT = 0.7
 
+# A quarterback's carries count as his dropbacks: pass plays by him, against
+# the defence's pass unit. CFBD logs a scramble as a rush, where nflverse
+# flags it as a dropback, so a college quarterback's escapes were landing in
+# his team's rush_off - over weeks 1-9 of 2024, carries by quarterbacks
+# averaged +0.30 ppa against +0.09 for other runs, and the fit missed that
+# by 0.19 a carry. Designed runs cannot be told apart from scrambles in the
+# text, so they go too. Walked forward over 2015-2026 on FBS-vs-FBS game
+# margins, this cut log-loss by 0.0012 +/- 0.0007 (in 2015-2021 and
+# 2022-2026 alike, and in 10 of 12 seasons) and MAE by 0.028 +/- 0.016.
+# The NFL's way - designed runs on the quarterback's rating but still against
+# the defence's rush unit (nfl.ratings.QB_RUN_MIN) - made college worse
+# (log-loss +0.0007): at a tenth of all plays, against 2% in the NFL, the
+# carries' higher level can't be left to the team and passer columns. A
+# rusher counts as a quarterback once he has QB_CARRY_MIN pass plays in the
+# plays being fitted; the few passers under 60 pass plays with many carries
+# are option quarterbacks (Navy, Army, Air Force).
+QB_CARRY_MIN = 10
+
 # Conferences get a shared rating each (rappa.model.Groups): four units, like
 # a team's, added to every member's. About two thirds of a team's plays are
 # against its own conference, and those cannot tell a better conference from
@@ -152,12 +186,15 @@ PASS_PRIOR_WEIGHT = 0.7
 # Walked forward over 2023-2026 on FBS-vs-FBS game margins (2022 the warm-up),
 # conferences cut MAE by 0.17 on 2023-2024 and 0.22 on 2025-2026, and
 # log-loss by 0.004-0.006. These values were chosen looking at all four
-# seasons, so the gain is a little optimistic.
+# seasons; on 2015-2021, which nothing was chosen on (2014 the warm-up), they
+# cut MAE by 0.08 +/- 0.03, and P4 teams went from 5.9 points underrated to
+# 0.7.
 #
 # CONF_ALPHA is the conference ratings' penalty (the teams' stays at their
-# alpha). 500-1000 were level; 200 was 0.02 worse, 5-50 worse still, as the
-# conference ratings then chase a few non-conference games.
-CONF_ALPHA = 500.0
+# alpha). On 2015-2026, 1000 beat 500 by 0.015 and 250 was 0.02 worse; on
+# 2023-2026 alone 200 was 0.02 worse and 5-50 worse still, as the conference
+# ratings then chase a few non-conference games.
+CONF_ALPHA = 1000.0
 
 # CONF_PRIOR_WEIGHT is how much of each conference's average rating last
 # season (over this season's members) carries forward: all of it. 0.9 and
@@ -190,6 +227,11 @@ CLOCK = re.compile(r"^\(\s*\d+:\d+\s*\)\s*")
 FORMATION = re.compile(r"^(?:(?:No Huddle|Shotgun|Pistol|Under Center|Wildcat)[- ]*)+", re.I)
 TD_PASS = re.compile(r"\d+ Yd pass from (.+?)(?:\s*\(|$)")
 PASSER = re.compile(r"^(?:#\d+\s+)?([^#()]+?)\s+(?:pass|sacked)\b", re.I)
+# Runs read the same two ways: "Jalen Milroe run for 5 yds", "Shotgun #4
+# J.Milroe rush right for 5 yards" or "J.Milroe rushed for 5 yards", and
+# touchdowns "Jalen Milroe 12 Yd Run (Will Reichard Kick)".
+TD_RUN = re.compile(r"^(?:#\d+\s+)?([^#()]+?)\s+\d+\s+Yd\s+Run\b", re.I)
+RUSHER = re.compile(r"^(?:#\d+\s+)?([^#()]+?)\s+(?:runs?|rush(?:ed|es)?)\b", re.I)
 SUFFIX = re.compile(r"\s+(?:Jr\.?|Sr\.?|II|III|IV|V)$", re.I)
 INITIALS = re.compile(r"^(?:[A-Z]\.){1,3}$|^[A-Z]{1,3}$")
 ABBREVIATED = re.compile(r"^([A-Za-z]{1,2})\.([A-Za-z].*)$")
@@ -301,6 +343,15 @@ def passer_name(text):
     return found.group(1).strip() if found else None
 
 
+def rusher_name(text):
+    """The ball carrier named in one run's text, as written, or None."""
+    if not isinstance(text, str):
+        return None
+    text = FORMATION.sub("", CLOCK.sub("", text))
+    found = TD_RUN.match(text) or RUSHER.match(text)
+    return found.group(1).strip() if found else None
+
+
 def passer_key(name):
     """One spelling for both styles of a name: first initial and last name, lower case.
 
@@ -337,11 +388,51 @@ def add_passers(df):
     return df.assign(passer=passer, passer_name=names.where(keys.notna()))
 
 
-def load(season, out):
+def add_rushers(df):
+    """A rusher id for every run whose text names one, built as add_passers builds a passer's."""
+    names = df.play_text.where(df.play_kind == "rush").map(rusher_name)
+    keys = names.map(lambda n: passer_key(n) if isinstance(n, str) else None)
+    return df.assign(rusher=(keys + "|" + df.offense).where(keys.notna()), rusher_name=names.where(keys.notna()))
+
+
+def qb_carries_as_dropbacks(df):
+    """df with every run by a quarterback turned into a pass play by him (see QB_CARRY_MIN).
+
+    A quarterback is a rusher with QB_CARRY_MIN or more pass plays in df
+    itself, so a walk-forward fit only knows who is one from the weeks it is
+    fitted on.
+    """
+    thrown = df.passer.value_counts()
+    carry = df.play_kind.eq("rush") & df.rusher.isin(thrown.index[thrown >= QB_CARRY_MIN])
+    return df.assign(play_kind=df.play_kind.mask(carry, "pass"), passer=df.passer.mask(carry, df.rusher),
+                     passer_name=df.passer_name.mask(carry, df.rusher_name))
+
+
+def snap_scores(plays):
+    """Each play's home and away score at the snap, plays in game order (CFBD reports them after it)."""
+    home_off = plays.offense == plays.home
+    home = pd.Series(np.where(home_off, plays.offense_score, plays.defense_score), index=plays.index)
+    away = pd.Series(np.where(home_off, plays.defense_score, plays.offense_score), index=plays.index)
+    home, away = home.groupby(plays.game_id).cummax(), away.groupby(plays.game_id).cummax()
+    pre = pd.DataFrame({"h": home, "a": away}).groupby(plays.game_id).shift(1).fillna(0)
+    return pre.h, pre.a
+
+
+def own_values(plays):
+    """Each play's value in our own expected points (rappa.expected_points), on the season's full play-by-play
+    in game order: NaN where a play has none."""
+    h, a = snap_scores(plays)
+    frame = plays[["game_id", "period", "down", "distance", "yards_to_goal", "offense", "home", "play_type"]]
+    return expected_points.play_values(frame.assign(h=h, a=a))
+
+
+def load(season, out, own_ep=None):
     """One season's rush and pass plays, in the columns rappa.fit expects, and its games.
 
     FCS teams are pooled in both. Games include those not played yet, with no
-    plays; margin is home minus away, NaN until a game is completed.
+    plays; margin is home minus away, NaN until a game is completed. own_ep
+    (default OWN_EP) values plays in our own expected points rather than
+    CFBD's ppa; the plays kept are the same either way.
     """
     plays_path, games_path = out / str(season) / "plays.csv", out / str(season) / "games.csv"
     if not plays_path.exists() or not games_path.exists():
@@ -351,8 +442,11 @@ def load(season, out):
     plays, games = pool_fcs(pd.read_csv(plays_path, low_memory=False), games)
     games = games.assign(week=continuous_week(games))
     plays = attach_game_context(add_pre_play_margin(plays), games)
+    if OWN_EP if own_ep is None else own_ep:
+        # Only plays CFBD values are kept, as before; a play without our value keeps CFBD's.
+        plays = plays.assign(ppa=own_values(plays).where(plays.ppa.notna()).fillna(plays.ppa))
     plays = plays[plays.ppa.notna() & plays.offense.notna() & plays.defense.notna()]
-    return add_passers(classify(plays).dropna(subset=["week"])), games
+    return add_rushers(add_passers(classify(plays).dropna(subset=["week"]))), games
 
 
 def conferences(games):
@@ -399,8 +493,13 @@ def conference_prior(prior, members):
     return gaps, averages
 
 
-def _prior_and_groups(prior, weights, members):
-    """The team prior to pass rappa.model, weighted, and the conferences' Groups (None without them)."""
+def _prior_and_groups(prior, weights, members, shift=None):
+    """The team prior to pass rappa.model, weighted and shifted, and the conferences' Groups (None without them).
+
+    shift (cfb.offseason.prior_shift) is added to each team's weighted prior;
+    a team with a shift but no prior (new to FBS) gets the shift alone. It is
+    only used when there is a prior.
+    """
     groups = None
     if members is not None:
         groups = Groups(members, CONF_ALPHA)
@@ -410,38 +509,43 @@ def _prior_and_groups(prior, weights, members):
     if prior is not None:
         # rappa.model takes one weight, so each unit's goes into the prior itself.
         prior = prior.assign(**{unit: prior[unit] * w for unit, w in weights.items()})
+        if shift is not None:
+            prior = prior[list(UNITS)].add(shift[list(UNITS)], fill_value=0.0)
     return prior, groups
 
 
 def fit(df, alpha=None, seed=0, prior=None, prior_weight=None, half_life=None, hfa=HFA, clip=CLIP,
-        members=None):
+        members=None, shift=None):
     """rappa.model.fit, with the college constants as defaults.
 
     prior_weight is as prior_weights takes it. members is conferences(games),
     or None to fit without conference ratings; with them alpha must be given.
-    Quarterbacks are not rated; see fit_qbs.
+    shift is cfb.offseason.prior_shift for the season, or None. Quarterbacks
+    are not rated; see fit_qbs.
     """
     if prior is not None and "qb" in prior:
         # A quarterback-aware rappa.csv leaves the passers out of pass_off:
         # put them back for a fit that does not rate them, and take out its
         # offsets (see SEASON_ALPHA).
         prior = centered(prior.assign(pass_off=prior.pass_off + prior.qb))
-    prior, groups = _prior_and_groups(prior, prior_weights(prior_weight, False, members is not None), members)
+    prior, groups = _prior_and_groups(prior, prior_weights(prior_weight, False, members is not None), members,
+                                      shift)
     return model.fit(df, alpha, hfa=hfa, clip=clip, prior=prior, prior_weight=1.0,
                      half_life=half_life, seed=seed, groups=groups)
 
 
 def fit_qbs(df, alpha=None, seed=0, prior=None, qb_prior=None, prior_weight=None, half_life=None,
-            hfa=HFA, clip=CLIP, members=None):
+            hfa=HFA, clip=CLIP, members=None, shift=None):
     """rappa.model.fit_passers with the college constants: team and quarterback ratings.
 
     prior is last season's rappa.csv, and qb_prior what each passer is shrunk
     toward (qb_prior_means); either may be None. prior_weight is as
-    prior_weights takes it, and members as fit takes it. Returns the team
-    ratings, the quarterback ratings (a Series by passer id), the penalty and
-    the intercept.
+    prior_weights takes it, and members and shift as fit takes them. Returns
+    the team ratings, the quarterback ratings (a Series by passer id), the
+    penalty and the intercept.
     """
-    prior, groups = _prior_and_groups(prior, prior_weights(prior_weight, True, members is not None), members)
+    prior, groups = _prior_and_groups(prior, prior_weights(prior_weight, True, members is not None), members,
+                                      shift)
     return model.fit_passers(df, alpha, hfa=hfa, clip=clip, prior=prior, prior_weight=1.0,
                              half_life=half_life, seed=seed, passer_prior=qb_prior,
                              passer_default=QB_REPLACEMENT, groups=groups)
@@ -540,6 +644,9 @@ def parse_args(argv=None):
     p.add_argument("--no-conferences", action="store_true",
                    help="rate teams without conference ratings (then rate every season before this one "
                         "the same way, as they are its prior)")
+    p.add_argument("--no-offseason", action="store_true",
+                   help="leave the prior unshifted by recruiting, returning production and coaching changes "
+                        "(the same goes for the seasons before)")
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args(argv)
 
@@ -565,26 +672,28 @@ def main(argv=None):
         prior = pd.read_csv(args.prior, index_col="team") if args.prior else None
         dest = args.out / str(season) / "rappa.csv"
         members = None if args.no_conferences else conferences(games)
+        shift = prior_shift(season, args.out) if prior is not None and not args.no_offseason else None
         if args.no_qbs:
             # A fit with conferences cannot cross-validate its penalty.
             alpha = SEASON_ALPHA if args.alpha is None and members is not None else args.alpha
             ratings, _, _ = fit(
                 df, alpha, args.seed, prior, args.prior_weight, args.half_life, args.hfa,
-                args.clip, members,
+                args.clip, members, shift,
             )
             ratings = summarize(ratings, df)
         else:
             qb_path = args.prior.parent / "qbs.csv" if args.prior else None
             qb_prior = pd.read_csv(qb_path, index_col="passer_id") if qb_path and qb_path.exists() else None
             alpha = SEASON_ALPHA if args.alpha is None else args.alpha
+            df = qb_carries_as_dropbacks(df)
             ratings, qbs, _, _ = fit_qbs(df, alpha, args.seed, prior, qb_prior_means(qb_prior, df.passer),
-                                         args.prior_weight, args.half_life, args.hfa, args.clip, members)
+                                         args.prior_weight, args.half_life, args.hfa, args.clip, members, shift)
             ratings = summarize(ratings, df, qbs)
             table = qb_table(qbs, df)
             table.to_csv(dest.parent / "qbs.csv")
             log.info("wrote %s (%d passers)", dest.parent / "qbs.csv", len(table))
-            print(f"\nQuarterbacks with 250+ dropbacks, {season} (vs_average: ppa per dropback against the "
-                  "average dropback, on top of the team's pass_off):")
+            print(f"\nQuarterbacks with 250+ dropbacks, carries included, {season} (vs_average: ppa per dropback "
+                  "against the average dropback, on top of the team's pass_off):")
             print(table[table.dropbacks >= 250].drop(columns="rating").head(args.top * 2).to_string())
         ratings.to_csv(dest)
         log.info("wrote %s (%d teams)", dest, len(ratings))

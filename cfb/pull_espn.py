@@ -22,7 +22,7 @@ in_window is True only for a snapshot dated after that week's last game and
 before the next week's first.
 
 teams.csv is ESPN's name, abbreviation, colours and logo for every FBS team
-that season, for cfb/site/build.py; team_id is CFBD's (and ESPN's) id.
+that season, for site/build.py; team_id is CFBD's (and ESPN's) id.
 """
 
 from __future__ import annotations

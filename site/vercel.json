@@ -1,0 +1,10 @@
+{
+  "framework": null,
+  "outputDirectory": ".",
+  "redirects": [
+    { "source": "/cfb", "destination": "/#cfb/teams", "permanent": false },
+    { "source": "/cfb/games", "destination": "/#cfb/predictions", "permanent": false },
+    { "source": "/cbb", "destination": "/", "permanent": false },
+    { "source": "/cbb/:path*", "destination": "/", "permanent": false }
+  ]
+}

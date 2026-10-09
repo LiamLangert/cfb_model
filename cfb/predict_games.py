@@ -6,18 +6,20 @@ walked forward so nothing is fitted on a game it predicts:
   stage 1  For each week W, fit RAPPA on the season's plays from every week
            before W, shrunk toward last season's ratings when they exist.
   stage 2  A regression maps the two rating edges onto a final margin and
-           picks up home field, in points, as its intercept.
+           picks up home field, in points, as its intercept. Each edge is
+           first scaled by the game's expected plays (cfb.stage2).
 
 Stage 1 gives every conference a shared rating (cfb.ratings.conferences), so
 a team is its conference's part plus its own, and rates quarterbacks on their
-own (cfb.ratings.fit_qbs). Each
+own (cfb.ratings.fit_qbs), their carries counted as dropbacks. Each
 side's pass offence in a game is its supporting cast plus the quarterback who
 starts it: the one who threw its first pass, or for a game not yet played,
 the team's most recent starter. A starter who has not thrown yet this season
 counts at his prior - last season's rating carried over, from his old team
 if he transferred (cfb.ratings.qb_prior_means) - or at replacement level.
-A team that has not played yet is rated at its prior, plus its conference's
-rating so far.
+Each team's prior is shifted by what changed over the offseason - its
+recruiting, returning production and coaching (cfb.offseason). A team that has
+not played yet is rated at its prior, plus its conference's rating so far.
 
 Special teams are rated alongside stage 1 from the season's punts and
 kickoffs (cfb.special_teams), and the gap between the two teams goes onto
@@ -50,9 +52,10 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from cfb import special_teams
+from cfb import special_teams, stage2
+from cfb.offseason import prior_shift
 from cfb.ratings import (FCS, QB_REPLACEMENT, centered, conferences, fit, fit_qbs, load, prior_weights,
-                         qb_prior_means)
+                         qb_carries_as_dropbacks, qb_prior_means)
 from nfl.predict_games import qb_edges
 from rappa.games import FEATURES, add_edges, against_the_spread, score
 from rappa.model import UNITS, summarize
@@ -85,7 +88,7 @@ def starters(plays, games):
     return wide.home.reindex(games.id).to_numpy(), wide.away.reindex(games.id).to_numpy()
 
 
-def unplayed(prior, teams, prior_weight, use_qbs, use_conferences=True):
+def unplayed(prior, teams, prior_weight, use_qbs, use_conferences=True, shift=None):
     """What the fit would rate teams with no plays yet: their prior, at the weights it carries.
 
     Only the prior's teams among `teams` come back; the rest stay unrated.
@@ -97,11 +100,14 @@ def unplayed(prior, teams, prior_weight, use_qbs, use_conferences=True):
         # As cfb.ratings.fit reads a quarterback-aware prior.
         prior = centered(prior.assign(pass_off=prior.pass_off + prior.qb))
     rows = prior.reindex([t for t in teams if t in prior.index])
-    return rows.assign(**{u: rows[u] * w for u, w in weights.items()})[list(UNITS)]
+    rows = rows.assign(**{u: rows[u] * w for u, w in weights.items()})[list(UNITS)]
+    if shift is not None:
+        rows = rows + shift.reindex(rows.index).fillna(0.0)[list(UNITS)]
+    return rows
 
 
 def season_features(season, out, start_week, alpha, prior_weight, use_prior, use_special_teams=True,
-                    use_qbs=True, use_conferences=True):
+                    use_qbs=True, use_conferences=True, use_offseason=True):
     """One row per game, using only ratings that predate it.
 
     Covers every week that has been played, plus the one after it.
@@ -124,6 +130,7 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
             log.warning("%d: no %s, every quarterback starts at replacement level", season, qb_path)
     elif use_prior:
         log.warning("%d: no %s, fitting without a prior", season, prior_path)
+    shift = prior_shift(season, out) if prior is not None and use_offseason else None
     if use_qbs:
         games["home_qb"], games["away_qb"] = starters(plays, games)
         ids = pd.concat([plays.passer, games.home_qb, games.away_qb])
@@ -136,18 +143,20 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
         before = plays[plays.week < week]
         if before.empty:
             continue
+        if use_qbs:
+            before = qb_carries_as_dropbacks(before)
         slate = games[games.week == week]
         rush_share = float((before.play_kind == "rush").mean())
         if use_qbs:
             ratings, qbs, _, _ = fit_qbs(before, alpha, prior=prior, qb_prior=start_at, prior_weight=prior_weight,
-                                         members=members)
+                                         members=members, shift=shift)
         else:
-            ratings, _, _ = fit(before, alpha, prior=prior, prior_weight=prior_weight, members=members)
+            ratings, _, _ = fit(before, alpha, prior=prior, prior_weight=prior_weight, members=members, shift=shift)
             qbs = None
         if prior is not None:
             waiting = set(slate.home_team) | set(slate.away_team)
             ratings = pd.concat([ratings, unplayed(prior, sorted(waiting - set(ratings.index)), prior_weight,
-                                                   use_qbs, use_conferences)])
+                                                   use_qbs, use_conferences, shift)])
         ratings = summarize(ratings, before, qbs)
         if use_qbs:
             if start_at is not None:
@@ -175,8 +184,9 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
 def walk_forward_predict(rows, min_train):
     """Fit the points conversion on every game played before this week, predict the week.
 
-    Special teams, when rows has them, go onto the margin at face value, so the
-    conversion is fitted on what they leave.
+    rows need cfb.stage2.with_scale's plays_scale, which the edges are scaled
+    by (cfb.stage2.design). Special teams, when rows has them, go onto the
+    margin at face value, so the conversion is fitted on what they leave.
     """
     st = rows.st_edge * special_teams.WEIGHT if "st_edge" in rows else 0.0
     rows = rows.assign(slot=rows.season * 100 + rows.week, st_points=st)
@@ -187,8 +197,8 @@ def walk_forward_predict(rows, min_train):
         if len(train) < min_train:
             continue
         test = rows[rows.slot == slot].copy()
-        model = LinearRegression().fit(train[FEATURES], train.margin - train.st_points)
-        test["predicted"] = model.predict(test[FEATURES]) + test.st_points
+        model = LinearRegression().fit(stage2.design(train), train.margin - train.st_points)
+        test["predicted"] = model.predict(stage2.design(test)) + test.st_points
         test["hfa"] = model.intercept_
         test["n_train"] = len(train)
         preds.append(test)
@@ -198,18 +208,19 @@ def walk_forward_predict(rows, min_train):
 
 
 def predict(seasons, out, start_week=2, alpha=ALPHA, prior_weight=None, use_prior=True, use_special_teams=True,
-            use_qbs=True, min_train=200, use_conferences=True):
+            use_qbs=True, min_train=200, use_conferences=True, use_offseason=True):
     """Walk-forward predictions for every game of these seasons that stage 2 has enough games for.
 
-    The priors on disk must have been rated the same way: with conferences
-    (the default), or all with cfb.ratings --no-conferences for use_conferences=False.
+    The priors on disk must have been rated the same way: with conferences and
+    offseason shifts (the default), or with cfb.ratings --no-conferences or
+    --no-offseason to match use_conferences=False or use_offseason=False.
     """
     rows = pd.concat([
         season_features(s, out, start_week, alpha, prior_weight, use_prior, use_special_teams, use_qbs,
-                        use_conferences)
+                        use_conferences, use_offseason)
         for s in sorted(seasons)
     ], ignore_index=True)
-    return walk_forward_predict(rows, min_train)
+    return walk_forward_predict(stage2.with_scale(rows, sorted(seasons), out), min_train)
 
 
 def report(preds):
@@ -292,6 +303,9 @@ def parse_args(argv=None):
     p.add_argument("--no-conferences", action="store_true",
                    help="rate teams without conference ratings (needs priors rated with cfb.ratings "
                         "--no-conferences)")
+    p.add_argument("--no-offseason", action="store_true",
+                   help="leave each prior unshifted by the offseason (needs priors rated with cfb.ratings "
+                        "--no-offseason)")
     p.add_argument("--save", type=Path, help="write per-game predictions, upcoming included, here")
     return p.parse_args(argv)
 
@@ -304,7 +318,8 @@ def main(argv=None):
         logging.getLogger(name).setLevel(logging.WARNING)
 
     preds = predict(args.seasons, args.out, args.start_week, args.alpha, args.prior_weight, not args.no_prior,
-                    not args.no_special_teams, not args.no_qbs, args.min_train, not args.no_conferences)
+                    not args.no_special_teams, not args.no_qbs, args.min_train, not args.no_conferences,
+                    not args.no_offseason)
     graded = report(preds)
     ahead = upcoming(preds)
 
