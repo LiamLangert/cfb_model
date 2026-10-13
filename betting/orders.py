@@ -227,6 +227,9 @@ def parse_args(argv=None):
     p.add_argument("--max-total-share", type=float, default=MAX_TOTAL_SHARE,
                    help=f"most of the bankroll the run spends (default {MAX_TOTAL_SHARE})")
     p.add_argument("--bankroll", type=float, help="size against this many dollars instead of the account's")
+    p.add_argument("--reserve", type=float, default=maker.RESERVE,
+                   help=f"dollars in the account never traded: the bankroll is the account less this "
+                        f"(default {maker.RESERVE:g}, kalshi.maker.RESERVE)")
     p.add_argument("--max-contracts", type=int, help="a fixed cap on contracts an order (default none)")
     p.add_argument("--max-order-cost", type=float, help="a fixed cap in dollars an order (default none)")
     p.add_argument("--max-total-cost", type=float, help="a fixed cap in dollars for the run, in place of the share")
@@ -279,13 +282,10 @@ def main(argv=None, client=None, now=None, confirm=input):
     if client.signed:
         taken, committed, exposure = account(client, books)
         balance = float(client.get("/portfolio/balance").get("balance_dollars") or 0)
-        # Kalshi's balance did not fall when orders were resting, so what they commit is taken off here. If it
-        # does already exclude them, this only spends less.
-        available = max(0.0, balance - committed)
-        bankroll = bankroll if bankroll is not None else balance + exposure
-        log.info("balance $%.2f, $%.2f committed to resting orders, $%.2f in positions: $%.2f to spend, "
-                 "bankroll $%.2f; %d game(s) already with an order or position",
-                 balance, committed, exposure, available, bankroll, len(taken))
+        available, bankroll = maker.funds(balance, committed, exposure, args.reserve, args.bankroll)
+        log.info("balance $%.2f ($%.2f held back), $%.2f committed to resting orders, $%.2f in positions: "
+                 "$%.2f to spend, bankroll $%.2f; %d game(s) already with an order or position",
+                 balance, args.reserve, committed, exposure, available, bankroll, len(taken))
     else:
         log.warning("no Kalshi key: not checking existing orders, positions or balance")
     if args.smoke:

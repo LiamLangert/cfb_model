@@ -75,6 +75,7 @@ import pandas as pd
 
 from betting import display
 from betting import orders as ko
+from kalshi import maker
 from kalshi import review as shared
 from kalshi.client import DEMO, PROD, Client, ticker_date
 from kalshi.review import KEEP_EDGE, MAX_LEAD, book_without, event_of, own_bids, toast  # noqa: F401
@@ -229,7 +230,7 @@ def run_day(client, season, week, out, now, args, confirm=input, notify=toast):
                  if float(p.get("position_fp") or 0) != 0]
     fills = client.pages("/portfolio/fills", "fills", limit=200)
     exposure = sum(abs(float(p.get("market_exposure_dollars") or 0)) for p in positions)
-    bankroll = args.bankroll if args.bankroll is not None else balance + exposure
+    bankroll = maker.funds(balance, 0.0, exposure, args.reserve, args.bankroll)[1]
 
     ours = set(ko.our_orders(out).index)
     reviews, replacements = review([o for o in resting if o["order_id"] in ours], games, matches, payloads, now,
@@ -247,13 +248,14 @@ def run_day(client, season, week, out, now, args, confirm=input, notify=toast):
         budget, basis = args.max_week_share * bankroll, f" ({args.max_week_share:.0%} of the ${bankroll:.2f} bankroll)"
     budget_left = max(0.0, budget - spent)
     orders_left = max(0, args.max_week_orders - len(events))
-    # Kalshi's balance does not fall while orders rest, so what they hold back is taken off.
-    available = max(0.0, balance - sum(committed(o) for o in kept) - extra)
+    # What the kept resting orders and the replacements hold back is taken off, and the reserve.
+    available = maker.funds(balance, sum(committed(o) for o in kept) + extra, exposure, args.reserve)[0]
     held, odd = holdings(kept, positions)
     busy = {e: "held on both teams or as NO contracts" for e in odd}
     moving = reviews.ticker[reviews.decision.isin(["cancel", "replace"])] if len(reviews) else []
     busy |= {event_of(t): "its resting order is cancelled or replaced in this run" for t in moving}
-    log.info("balance $%.2f, $%.2f to spend, bankroll $%.2f", balance, available, bankroll)
+    log.info("balance $%.2f ($%.2f held back), $%.2f to spend, bankroll $%.2f", balance, args.reserve, available,
+             bankroll)
 
     planned = ko.plan(games, matches, {t: book_without(p, own_bids(resting).get(t)) for t, p in payloads.items()},
                       busy, now, season, week, args.weight, args.min_edge, args.max_contracts, args.max_order_cost,
@@ -288,6 +290,9 @@ def parse_args(argv=None):
     p.add_argument("--max-game-share", type=float, default=ko.MAX_GAME_SHARE,
                    help=f"most of the bankroll on one game, the biggest bet (default {ko.MAX_GAME_SHARE})")
     p.add_argument("--bankroll", type=float, help="size against this many dollars instead of the account's")
+    p.add_argument("--reserve", type=float, default=maker.RESERVE,
+                   help=f"dollars in the account never traded: the bankroll is the account less this "
+                        f"(default {maker.RESERVE:g}, kalshi.maker.RESERVE)")
     p.add_argument("--max-contracts", type=int, help="a fixed cap on contracts an order (default none)")
     p.add_argument("--max-order-cost", type=float, help="a fixed cap in dollars an order (default none)")
     p.add_argument("--demo", action="store_true", help="Kalshi's demo exchange (needs a demo key)")

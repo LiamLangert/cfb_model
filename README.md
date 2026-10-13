@@ -42,6 +42,13 @@ the latest pull. Extra arguments go to `betting.daily` (`--bankroll 50`,
 lists them). Each run's output goes to data/logs/bets-<date>.log. Nothing
 runs on a schedule.
 
+$250 of the Kalshi account is a reserve that is never bet (`RESERVE` in
+`../kalshi/kalshi/maker.py`, shared by both projects, which trade the same
+account): the bankroll every size and cap is a share of is the account less
+it, so it still grows and shrinks with the bets, and no order spends into
+it. `--reserve` changes it for a run; `--bankroll` sizes against a fixed
+amount instead.
+
 ## Layout
 
 ```

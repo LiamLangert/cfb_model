@@ -848,3 +848,17 @@ def test_a_rerun_with_orders_resting_places_nothing_new(week):
     ko.main(["--season", "2026", "--week", "6", "--out", str(out), "--execute", "--yes"], client=client,
             now=NOW + timedelta(minutes=5))
     assert len(client.posts) == n  # the games are taken by their resting orders, whatever the ids
+
+
+def test_the_reserve_is_never_bet(week):
+    out, mk, books = week
+    log = out.parent / "kalshi" / "orders" / "2026_wk06.csv"
+    runs = []
+    for balance, reserve in (("100.00", "0"), ("350.00", "250"), ("200.00", "250")):
+        before = len(pd.read_csv(log)) if log.exists() else 0
+        assert run(out, FakeKalshi(mk, books, balance=balance), "--reserve", reserve) == 0
+        runs.append(pd.read_csv(log).iloc[before:].reset_index(drop=True))
+    plain, reserved, short = runs
+    cols = ["game_id", "decision", "reason", "count", "cost", "bankroll"]
+    pd.testing.assert_frame_equal(plain[cols], reserved[cols])  # $350 with $250 held back bets as $100 does
+    assert (plain.decision == "order").sum() == 2 and not (short.decision == "order").any()  # under it: nothing

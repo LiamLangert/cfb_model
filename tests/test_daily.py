@@ -473,3 +473,17 @@ def test_toast_never_breaks_the_run():
     def missing(cmd, **kw):
         raise FileNotFoundError("powershell.exe")
     kd.toast("t", "b", run=missing)  # logged, not raised
+
+
+def test_the_daily_run_never_bets_the_reserve(week):
+    out, mk, books = week
+    log = out.parent / "kalshi" / "orders" / "2026_wk06.csv"
+    runs = []
+    for balance, reserve in (("100.00", "0"), ("350.00", "250"), ("200.00", "250")):
+        before = len(pd.read_csv(log)) if log.exists() else 0
+        assert daily(out, DepthKalshi(mk, books, balance=balance), "--reserve", reserve) == 0
+        runs.append(pd.read_csv(log).iloc[before:].reset_index(drop=True))
+    plain, reserved, short = runs
+    cols = ["game_id", "decision", "reason", "count", "cost", "bankroll"]
+    pd.testing.assert_frame_equal(plain[cols], reserved[cols])  # the week's budget is a share of the $100 too
+    assert (plain.decision == "order").sum() == 2 and not short.decision.isin(["order", "later"]).any()
