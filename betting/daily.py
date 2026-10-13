@@ -1,17 +1,18 @@
 """The daily Kalshi run: the week's plan, placed a game at a time, 2-30 hours before each kickoff.
 
-cfb.kalshi_orders plans the whole week at once, and run on Tuesday its resting
+betting.orders plans the whole week at once, and run on Tuesday its resting
 bids were picked off: in backtests a bid placed Tuesday at 10am made +0.9c a
 contract on the fills it got, against +3 to +8c for one placed 6-72 hours
 before kickoff (each about +/- 3-4c), while the bids that never filled would
 have won. Prices that sit for days get hit by whoever learns something first.
-So this runs every day and only places on games kicking off between MIN_LEAD
-(2h) and MAX_LEAD (30h) from now. Run at 4pm, Friday's run takes Friday's
-games and Saturday's up to 10pm; Saturday's takes the rest.
+So it only places on games kicking off between MIN_LEAD (2h) and MAX_LEAD
+(30h) from now, and is run again on the days after for the rest: run at 4pm,
+Friday's run takes Friday's games and Saturday's up to 10pm; Saturday's takes
+the rest.
 
-Each run, with cfb.kalshi_orders' pricing, guards and sizing:
+Each run, with betting.orders' pricing, guards and sizing:
 
-  1. Reviews every resting order this module or cfb.kalshi_orders placed on
+  1. Reviews every resting order this module or betting.orders placed on
      the week's games, against the book without the order itself in it:
        keep     the edge still clears KEEP_EDGE, and nobody bids above it
        cancel   the edge is under KEEP_EDGE, or a guard now fails (a wide or
@@ -47,20 +48,19 @@ cancels first, then replacements and new orders, stopping at the first
 error it does not expect, then a --track snapshot. A plan is never placed
 from an earlier run, so what is confirmed is what is sent.
 
---notify (the scheduled run) pops up a Windows notification when there is
+--notify (for a run nobody watches) pops up a Windows notification when there is
 something to place or cancel, or when the run fails. The run builds the
 week's predictions (cfb.week_parts) first when they are missing or older
 than the season's games and plays.
 
 Logs, in data/kalshi/orders/: the plan and execute rows go to the week's
-<season>_wk<NN>.csv beside cfb.kalshi_orders' (planner "daily", with
+<season>_wk<NN>.csv beside betting.orders' (planner "daily", with
 lead_hours, the hours from the run to kickoff), so --track follows the
 orders placed here; reviews.csv has every review; cancels.csv every cancel.
 
-    uv run --with cryptography -m cfb.kalshi_daily              # plan only
-    uv run --with cryptography -m cfb.kalshi_daily --execute    # place, after confirming
-    cfb/kalshi_daily.sh                                         # the scheduled run: track, plan, notify
-    cfb/kalshi_daily.sh --execute                               # the same as the second line, logged
+    uv run --with cryptography -m betting.daily              # plan only
+    uv run --with cryptography -m betting.daily --execute    # place, after confirming
+    ./bets.sh                                                # --track, then --execute, logged
 """
 
 from __future__ import annotations
@@ -77,10 +77,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from cfb import kalshi_display as display
-from cfb import kalshi_orders as ko
-from rappa import kalshi
-from rappa.kalshi import Client, KalshiError, maker_fee, parse_book, ticker_date
+from betting import display, kalshi
+from betting import orders as ko
+from betting.kalshi import Client, KalshiError, maker_fee, parse_book, ticker_date
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +88,7 @@ MAX_LEAD = timedelta(hours=30)
 # A resting order is kept while its edge clears KEEP_EDGE, below the MIN_EDGE it was placed at, so a
 # half-cent wiggle in the mid does not cancel it and cost its place in the queue.
 KEEP_EDGE = 0.01
-# The week's budget, in place of cfb.kalshi_orders' per-run MAX_TOTAL_SHARE and MAX_ORDERS: the same caps, for a
+# The week's budget, in place of betting.orders' per-run MAX_TOTAL_SHARE and MAX_ORDERS: the same caps, for a
 # week of daily runs instead of one Tuesday run. The money is a share of the bankroll, so it grows with it.
 MAX_WEEK_SHARE = ko.MAX_TOTAL_SHARE
 MAX_WEEK_ORDERS = ko.MAX_ORDERS
@@ -135,7 +134,7 @@ def event_of(ticker):
 
 
 def guard(g, hb, ab):
-    """Why the game's books cannot be priced off, as cfb.kalshi_orders.plan's guards say it, or None."""
+    """Why the game's books cannot be priced off, as betting.orders.plan's guards say it, or None."""
     if hb is None or ab is None or hb.mid is None or ab.mid is None:
         return "a book is empty"
     if max(hb.width, ab.width) > ko.MAX_WIDTH + 1e-9:
@@ -152,7 +151,7 @@ def guard(g, hb, ab):
 
 def replacement_id(order, season, week, run):
     """A new client_order_id for the order replacing `order`: Kalshi refuses any id it has seen (see
-    cfb.kalshi_orders.NAMESPACE), so it names the order replaced as well as the run."""
+    betting.orders.NAMESPACE), so it names the order replaced as well as the run."""
     return str(uuid.uuid5(ko.NAMESPACE, f"rappa-cfb:{order['ticker']}:{season}:{week}:{run.isoformat()}:"
                                         f"replaces:{order['order_id']}"))
 
@@ -164,7 +163,7 @@ def review(resting, games, matches, payloads, now, season, week, bankroll, weigh
 
     resting is our resting orders (Kalshi's order dicts), games the parts slate, matches match_events',
     payloads each matched ticker's orderbook response. Returns (reviews, replacements): one review row per
-    order, and the plan rows (cfb.kalshi_orders' columns) of the orders that replace those being replaced.
+    order, and the plan rows (betting.orders' columns) of the orders that replace those being replaced.
     """
     by_event = {hit["event"]: (gid, hit) for gid, hit in matches.items()}
     slate = {g["game_id"]: g for g in games.to_dict("records")}
@@ -372,7 +371,7 @@ def summary(reviews, now_orders):
               for _, r in (acts[acts.decision == d].iterrows() if len(acts) else [])]
     cost = f" (${now_orders.cost.sum():.2f})" if len(now_orders) else ""
     return (f"RAPPA Kalshi: {', '.join(parts)}",
-            f"{'; '.join(lines)}{cost}. Run cfb/kalshi_daily.sh --execute")
+            f"{'; '.join(lines)}{cost}. Run ./bets.sh")
 
 
 # ---------- the run ----------
@@ -589,7 +588,7 @@ def main(argv=None, client=None, now=None, confirm=input, notify=toast):
             print(f"no week ahead in {season}: nothing to plan")
             return 0
         if not args.no_build and ensure_parts(season, week, args.out) == "waiting":
-            print(f"week {week}'s predictions wait for the pull after week {week - 1}'s games (site/weekly.sh)")
+            print(f"week {week}'s predictions wait for the pull after week {week - 1}'s games (./update.sh)")
             return 0
         if client is None:
             client = Client.from_env(args.env, host=kalshi.DEMO if args.demo else kalshi.PROD,

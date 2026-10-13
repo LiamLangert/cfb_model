@@ -27,13 +27,13 @@ Walked forward over 2016-2026, each season fitted on the ones before it:
 
   - The line misses the final margin by 10.029 points a game, the average by
     10.068: the median is the better guess when misses are counted in points.
-    nfl.benchmark grades the average all the same.
+    research.nfl_benchmark grades the average all the same.
   - 14.8% of lines are 3, against 14.1% of the closing lines and 5.2% of the
     averages rounded to the half point.
   - Favourites by 8 to 12 beat the average 45.6% of the time and the line
     51.8%.
   - It would not improve win probability: P(margin > 0) from these margins
-    predicted the winner a little worse than nfl.benchmark's normal curve
+    predicted the winner a little worse than research.nfl_benchmark's normal curve
     (log-loss 0.6248 against 0.6243), so that stays.
 
 The score at the line is for reading, not for accuracy, so it agrees with the

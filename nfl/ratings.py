@@ -71,7 +71,7 @@ HFA = 0.003
 
 # The constants below were re-tuned on game margins rather than holdout plays:
 # nfl.predict_games walked forward over 2015-2022, choosing on MAE and
-# log-loss, then checked on 2023-2026 (see nfl.benchmark). Together they cut
+# log-loss, then checked on 2023-2026 (see research.nfl_benchmark). Together they cut
 # MAE by 0.066 +/- 0.026 points a game against the play-tuned values (clip 4,
 # no garbage filter, one prior weight of 0.45), and by 0.11 on 2023-2026.
 # The optimum is broad for all of them.
@@ -93,7 +93,7 @@ CLIP = 3.0
 
 # Whether penalty no-plays (pass interference, holding and the like, which
 # nflverse flags as passes or rushes) stay in the fit. On holdout plays keeping
-# them looked slightly better (nfl.validate's penalties experiment), but walked
+# them looked slightly better (research.nfl_validate's penalties experiment), but walked
 # forward on game margins over 2015-2026, dropping them, as college does, cut
 # log-loss by 0.0009 +/- 0.0008 and MAE by 0.009 +/- 0.014. load keeps them,
 # flagged no_play; the fits drop them. This came in with QB_RUN_MIN and
@@ -174,7 +174,7 @@ def load(season, out, own_ep=None):
 
     A play counts if nflverse flags it as a pass or a rush. That puts sacks and
     scrambles with passes, and it takes in penalty no-plays such as pass
-    interference: they are kept here, flagged no_play, for nfl.validate, and
+    interference: they are kept here, flagged no_play, for research.nfl_validate, and
     the fits drop them (PENALTIES). Kneels and spikes carry neither flag.
     Two-point tries do, and are dropped because they are not played from a
     down and distance. own_ep (default OWN_EP) values plays in our own
@@ -212,7 +212,7 @@ def load(season, out, own_ep=None):
         "passer_name": df.passer.where(df["pass"].eq(1)),
         # For with_qb_runs: who carried the ball on a run.
         "rusher": df.rusher_id.where(df["pass"].ne(1)),
-        # Dropped from the fits unless PENALTIES; nfl.validate tests keeping them.
+        # Dropped from the fits unless PENALTIES; research.nfl_validate tests keeping them.
         "no_play": df.play_type.eq("no_play"),
     }).reset_index(drop=True)
 

@@ -32,6 +32,26 @@ def add_edges(slate, ratings):
     )
 
 
+def win_probability(preds, min_games):
+    """RAPPA's home win probability, from the spread of its own earlier misses."""
+    slot = preds.season * 100 + preds.week
+    miss = (preds.margin - preds.predicted).dropna()
+    sigma = {}
+    for s in sorted(slot.unique()):
+        earlier = miss[slot[miss.index] < s]
+        sigma[s] = earlier.std() if len(earlier) >= min_games else np.nan
+    sigma = slot.map(sigma)
+    return preds.assign(sigma=sigma, rappa_wp=stats.norm.cdf(preds.predicted / sigma))
+
+
+def market_wp(games):
+    """The home side's closing moneyline as a probability, with the vig taken out."""
+    def implied(ml):
+        return np.where(ml < 0, -ml / (100 - ml), 100 / (ml + 100))
+    home, away = implied(games.home_moneyline), implied(games.away_moneyline)
+    return home / (home + away)
+
+
 def score(preds):
     """Accuracy of the model and of the market, on the same games."""
     graded = preds.dropna(subset=["spread"]).copy()

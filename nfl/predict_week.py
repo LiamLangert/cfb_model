@@ -4,7 +4,7 @@ The predictions are nfl.predict_games', for the target week only: ratings
 from the season's plays before it (quarterbacks, special teams and rest
 included), shrunk toward last season's, and the points conversion fitted on
 every game played before the week since --since. The default, 2015, trains
-it as nfl.benchmark grades it. The week defaults to the season's next one: the
+it as research.nfl_benchmark grades it. The week defaults to the season's next one: the
 first with a game not played yet. A week already played shows what the model
 would have said.
 
@@ -30,8 +30,9 @@ run game against the other's rush defence and its passing game, quarterback
 included, against their pass defence, each matchup the offence's worth less
 the defence's, with nothing extra for a mismatch.
 
-Win probability is nfl.benchmark's: Phi(margin / sigma), where sigma is the
-sd of RAPPA's misses on every game it predicted before this week.
+Win probability is rappa.games.win_probability, as research.nfl_benchmark
+grades it: Phi(margin / sigma), where sigma is the sd of RAPPA's misses on
+every game it predicted before this week.
 
 The line is the predicted margin as the market sets one: the half point the
 home side is as likely to beat as to fall short of, from nfl.key_numbers'
@@ -57,8 +58,8 @@ most games a few days ahead; a game without one gets the team's latest
 starter. A starter who has not played this season is rated at last season's
 rating carried over (nfl.ratings.QB_PRIOR_WEIGHT), or at replacement level.
 
-On 2015-2026 nfl.benchmark has these margins 0.28 points a game worse than
-the closing line in MAE, and nfl.backtest_week has never shown an edge
+On 2015-2026 research.nfl_benchmark has these margins 0.28 points a game worse than
+the closing line in MAE, and research.nfl_backtest_week has never shown an edge
 against the spread, so read a gap to the market as disagreement, not a bet.
 
 Writes <out>/<season>/predictions_wk<NN>.csv, one row per game, which
@@ -76,10 +77,9 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 
 from nfl import key_numbers, offseason, outside, pace
-from nfl.benchmark import market_wp, win_probability
 from nfl.predict_games import ALPHA, REST_CLIP, REST_WEIGHT, load_games, season_features, walk_forward_predict
 from nfl.ratings import QB_REPLACEMENT, centered, fit_qbs, in_fit, load, qb_prior_means, with_qb_runs
-from rappa.games import FEATURES
+from rappa.games import FEATURES, market_wp, win_probability
 from rappa.model import summarize
 
 log = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ def sources(season, out, since=FIRST_SEASON):
     code = Path(__file__).resolve().parent
     files += [code / f for f in
               ("predict_week.py", "predict_games.py", "ratings.py", "special_teams.py", "outside.py",
-               "benchmark.py", "key_numbers.py", "pace.py", "offseason.py")]
+               "key_numbers.py", "pace.py", "offseason.py")]
     files += [code.parent / "rappa" / f for f in ("model.py", "games.py", "special_teams.py", "expected_points.py",
                                                    "outside.py")]
     return [p for p in files if p.exists()]

@@ -37,9 +37,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 from nfl.predict_games import ALPHA, season_features, walk_forward_predict
+from rappa.games import market_wp, win_probability
 
 log = logging.getLogger(__name__)
 
@@ -59,26 +59,6 @@ def load_espn(seasons, out):
             raise SystemExit(f"{path} not found - run `uv run -m nfl.pull_espn {season}` first")
         frames.append(pd.read_csv(path, usecols=["game_id", "espn_margin", "espn_home_wp"]))
     return pd.concat(frames, ignore_index=True)
-
-
-def win_probability(preds, min_games):
-    """RAPPA's home win probability, from the spread of its own earlier misses."""
-    slot = preds.season * 100 + preds.week
-    miss = (preds.margin - preds.predicted).dropna()
-    sigma = {}
-    for s in sorted(slot.unique()):
-        earlier = miss[slot[miss.index] < s]
-        sigma[s] = earlier.std() if len(earlier) >= min_games else np.nan
-    sigma = slot.map(sigma)
-    return preds.assign(sigma=sigma, rappa_wp=stats.norm.cdf(preds.predicted / sigma))
-
-
-def market_wp(games):
-    """The home side's closing moneyline as a probability, with the vig taken out."""
-    def implied(ml):
-        return np.where(ml < 0, -ml / (100 - ml), 100 / (ml + 100))
-    home, away = implied(games.home_moneyline), implied(games.away_moneyline)
-    return home / (home + away)
 
 
 def losses(games, wp):

@@ -1,4 +1,4 @@
-"""Terminal tables for cfb.kalshi_orders and cfb.kalshi_daily.
+"""Terminal tables for betting.orders and betting.daily.
 
 Every table fits the terminal: text columns (games, teams, reasons) are cut, widest first, until the row fits,
 so nothing wraps. Prices are in cents, probabilities in percent, kickoffs in Eastern time. The order a row
@@ -27,8 +27,8 @@ JUST_PLACED = timedelta(minutes=15)
 
 
 def term_width(default=DEFAULT_WIDTH):
-    """Columns to fit to: COLUMNS if set, else the terminal on stdout, stderr or stdin (kalshi_daily.sh pipes
-    stdout and stderr through tee, but stdin is still the terminal), else default (the scheduled run's log)."""
+    """Columns to fit to: COLUMNS if set, else the terminal on stdout, stderr or stdin (bets.sh pipes stdout
+    and stderr through tee, but stdin is still the terminal), else default (a run with no terminal)."""
     if os.environ.get("COLUMNS", "").isdigit():
         return int(os.environ["COLUMNS"])
     for fd in (1, 2, 0):

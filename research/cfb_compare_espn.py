@@ -1,6 +1,6 @@
 """Grade ESPN's college FPI projections against the closing spread, next to RAPPA's.
 
-The college counterpart of nfl.compare_espn, which does most of the work
+The college counterpart of research.nfl_compare_espn, which does most of the work
 here (pregame_check, season_table, agreement). RAPPA's predictions are
 cfb.predict_games', and both are graded by rappa.games.grade on the same
 games: every game with a line is a bet on the side each likes more than the
@@ -26,8 +26,8 @@ import pandas as pd
 
 from cfb.predict_games import ALPHA, EDGES, predict
 from cfb.ratings import load
-from nfl.compare_espn import agreement, load_fpi, pregame_check, season_table
 from rappa.games import against_the_spread, grade, overall, record
+from research.nfl_compare_espn import agreement, load_fpi, pregame_check, season_table
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def parse_args(argv=None):
     p.add_argument("--out", type=Path, default=Path("data/cfb"), help="data dir (default: data/cfb)")
     p.add_argument("--warmup", type=int, default=1,
                    help="seasons before the first one given to fit but not grade (default: 1)")
-    # The same defaults as cfb.backtest_week, so RAPPA's side is what it grades.
+    # The same defaults as research.cfb_backtest_week, so RAPPA's side is what it grades.
     p.add_argument("--min-train", type=int, default=200,
                    help="games the conversion needs before it predicts (default: 200)")
     p.add_argument("--alpha", type=float, default=ALPHA)

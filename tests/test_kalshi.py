@@ -1,4 +1,4 @@
-"""rappa.kalshi: fees, books, names, signing, and the read-only guard. No network."""
+"""betting.kalshi: fees, books, names, signing, and the read-only guard. No network."""
 
 import base64
 import urllib.error
@@ -7,8 +7,8 @@ import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 
-from rappa import kalshi
-from rappa.kalshi import Book, Client, KalshiError, ReadOnlyError, parse_book
+from betting import kalshi
+from betting.kalshi import Book, Client, KalshiError, ReadOnlyError, parse_book
 
 
 class FakeSend:

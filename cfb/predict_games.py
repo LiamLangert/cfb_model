@@ -38,7 +38,7 @@ As in the NFL version:
 
 The constants were tuned walking forward on game margins over 2023-2024
 and checked on 2025-2026, on FBS-vs-FBS games from week 2 on, with 2022 as
-the warm-up (see cfb.ratings and cfb.benchmark).
+the warm-up (see cfb.ratings and research.cfb_benchmark).
 
 Predicted margin is from the home team's point of view, matching -spread.
 """

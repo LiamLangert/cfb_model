@@ -1,6 +1,6 @@
 """Season-by-season accuracy of college RAPPA, ESPN's FPI and the closing market, on the same games.
 
-The college counterpart of nfl.benchmark, scored the same way (its row and
+The college counterpart of research.nfl_benchmark, scored the same way (its row and
 season_table do the scoring):
 
     MAE       mean absolute error of the projected home margin, in points
@@ -46,7 +46,8 @@ from scipy import stats
 
 from cfb.predict_games import ALPHA, predict
 from cfb.stage2 import win_probability
-from nfl.benchmark import MODELS, market_wp, paired, season_table
+from rappa.games import market_wp
+from research.nfl_benchmark import MODELS, paired, season_table
 
 log = logging.getLogger(__name__)
 

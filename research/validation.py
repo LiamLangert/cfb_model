@@ -1,4 +1,4 @@
-"""Scoring RAPPA on plays it was not fitted on, shared by cfb.validate and nfl.validate.
+"""Scoring RAPPA on plays it was not fitted on, shared by research.cfb_validate and research.nfl_validate.
 
 Scoring unit is one team's offence in one game, keeping only units with enough
 plays for the average to mean anything. A prediction is scored by its

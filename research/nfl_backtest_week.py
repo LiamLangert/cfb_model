@@ -3,7 +3,7 @@
 The predictions are nfl.predict_games', made the same way: each week rated
 from the plays before it, shrunk toward last season's ratings, with the
 points conversion fitted on every game played before that week, earlier
-seasons included. Grading is the same as cfb.backtest_week (rappa.games.grade):
+seasons included. Grading is the same as research.cfb_backtest_week (rappa.games.grade):
 every game with a line is a bet on the side the model likes more than the
 market, and pushes are left out of the win rate. Break-even at -110 is 52.4%.
 

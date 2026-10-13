@@ -1,10 +1,10 @@
-"""cfb.kalshi_display: tables fit the width, and --track lists only the orders worth a look. No network."""
+"""betting.display: tables fit the width, and --track lists only the orders worth a look. No network."""
 
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from cfb import kalshi_display as display
+from betting import display
 
 NOW = datetime(2026, 10, 9, 20, 0, tzinfo=timezone.utc)  # Friday 4pm ET
 

@@ -1,6 +1,6 @@
 """Grade ESPN's FPI projections against the closing spread, next to RAPPA's.
 
-RAPPA's predictions are rebuilt the way nfl.backtest_week makes them, and
+RAPPA's predictions are rebuilt the way research.nfl_backtest_week makes them, and
 both are graded by its rule on the same games: every game with a line is a
 bet on the side each likes more than the market, pushes are left out, and
 break-even at -110 is 52.4%. ESPN's number is espn_margin from its matchup
@@ -117,7 +117,7 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("seasons", type=int, nargs="+", help="seasons to grade, e.g. 2023 2024 2025 2026")
     p.add_argument("--out", type=Path, default=Path("data/nfl"), help="data dir (default: data/nfl)")
-    # The same defaults as nfl.backtest_week, so RAPPA's side is what it grades.
+    # The same defaults as research.nfl_backtest_week, so RAPPA's side is what it grades.
     p.add_argument("--min-train", type=int, default=100,
                    help="games the conversion needs before it predicts (default: 100)")
     p.add_argument("--alpha", type=float, default=ALPHA)

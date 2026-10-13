@@ -1,4 +1,4 @@
-"""cfb.kalshi_daily: the window, the week's budget, the review of resting orders, and that nothing is sent
+"""betting.daily: the window, the week's budget, the review of resting orders, and that nothing is sent
 unless asked. No network."""
 
 import base64
@@ -9,10 +9,10 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from cfb import kalshi_daily as kd
-from cfb import kalshi_orders as ko
-from rappa.kalshi import Book, Client, KalshiError, maker_fee
-from test_kalshi_orders import NOW as TUESDAY, FakeKalshi, book_pair, game, markets_for
+from betting import daily as kd
+from betting import orders as ko
+from betting.kalshi import Book, Client, KalshiError, maker_fee
+from test_orders import NOW as TUESDAY, FakeKalshi, book_pair, game, markets_for
 
 FRIDAY = datetime(2026, 10, 9, 20, 0, tzinfo=timezone.utc)  # 4pm ET; the fixture's games are Saturday 3:30pm ET
 KICK = datetime(2026, 10, 10, 19, 30, tzinfo=timezone.utc)
@@ -113,7 +113,7 @@ def test_friday_dry_run_sends_nothing_and_notifies(week):
     logged = week_log(out)
     assert set(logged["mode"]) == {"plan"} and (logged.decision == "order").sum() == 2
     assert logged[logged.decision == "order"].lead_hours.eq(23.5).all()
-    assert len(notes) == 1 and notes[0][0] == "RAPPA Kalshi: 2 to place" and "--execute" in notes[0][1]
+    assert len(notes) == 1 and notes[0][0] == "RAPPA Kalshi: 2 to place" and "./bets.sh" in notes[0][1]
 
 
 def test_no_notification_without_notify_or_with_nothing_to_do(week):
@@ -146,7 +146,7 @@ def test_friday_execute_needs_the_typed_confirmation(week):
     for _, body in client.posts:
         assert body["post_only"] is True and body["side"] == "bid"
         assert datetime.fromtimestamp(body["expiration_time"], timezone.utc) == KICK - ko.EXPIRE_BEFORE
-    # tracked like cfb.kalshi_orders' own, from the same week log
+    # tracked like betting.orders' own, from the same week log
     orders = pd.read_csv(out.parent / "kalshi" / "orders" / "orders.csv")
     assert len(orders) == 2 and set(orders.status) == {"resting"}
     assert set(ko.our_orders(out).index) == set(client.orders)

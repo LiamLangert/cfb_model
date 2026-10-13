@@ -12,7 +12,7 @@ about twice what it did in the NFL: college kicking units differ more, by
 0.74 points a game (sd) in 2025. The NFL's ALPHA, CLIP and WEIGHT held up:
 other values moved MAE by under 0.04.
 
-`uv run -m cfb.special_teams <season>` prints a season's ratings.
+`uv run -m research.cfb_special_teams <season>` prints a season's ratings.
 """
 
 from __future__ import annotations

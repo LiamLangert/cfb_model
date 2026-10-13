@@ -1,4 +1,4 @@
-"""cfb.kalshi_orders: pricing, matching, guards, caps, and that nothing is sent unless asked. No network."""
+"""betting.orders: pricing, matching, guards, caps, and that nothing is sent unless asked. No network."""
 
 import math
 from datetime import datetime, timedelta, timezone
@@ -8,8 +8,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from cfb import kalshi_orders as ko
-from rappa.kalshi import Book, Client, maker_fee
+from betting import orders as ko
+from betting.kalshi import Book, Client, maker_fee
 
 NOW = datetime(2026, 10, 6, 14, 0, tzinfo=timezone.utc)  # Tuesday 10am ET
 BANKROLL = 50.0
@@ -308,7 +308,7 @@ def test_order_body_is_a_post_only_expiring_yes_bid():
 # ---------- execution ----------
 
 class FakeKalshi:
-    """Stands in for rappa.kalshi.Client: canned markets and books, and a small exchange that keeps the
+    """Stands in for betting.kalshi.Client: canned markets and books, and a small exchange that keeps the
     orders it is sent, cancels them, and can be told an order filled or a market settled."""
 
     def __init__(self, markets, books, balance="100.00", resting=(), positions=(), post_status=None, read_only=True):
@@ -332,7 +332,7 @@ class FakeKalshi:
         if path.startswith("/portfolio/orders/"):
             if self.lag:
                 self.lag -= 1
-                from rappa.kalshi import KalshiError
+                from betting.kalshi import KalshiError
                 raise KalshiError(404, {"error": {"code": "not_found"}}, "GET", path)
             return {"order": self.orders[path.rsplit("/", 1)[1]]}
         if path.startswith("/markets/"):
@@ -359,7 +359,7 @@ class FakeKalshi:
         if any(o["client_order_id"] == body["client_order_id"] for o in self.orders.values()):
             status = 409  # Kalshi: order_already_exists, for any id it has seen, cancelled orders' too
         if status:
-            from rappa.kalshi import KalshiError
+            from betting.kalshi import KalshiError
             raise KalshiError(status, "err", "POST", path)
         oid = f"oid-{len(self.posts)}"
         self.orders[oid] = {"order_id": oid, "client_order_id": body["client_order_id"], "ticker": body["ticker"],

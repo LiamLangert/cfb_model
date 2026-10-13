@@ -36,7 +36,7 @@ Guards, each logged as the reason a game was skipped:
   - kickoff at least MIN_LEAD away, and a kickoff time listed; every order
     expires EXPIRE_BEFORE kickoff, so nothing rests into the game
   - no order already resting, and no position held, in the game's event
-    (cfb.kalshi_daily tops such a game up to its Kelly size instead; see plan)
+    (betting.daily tops such a game up to its Kelly size instead; see plan)
   - the queue: a cent above the best bid when the bid is already crowded
     (IMPROVE_SHARE of the volume expected before expiry), joining it
     otherwise; and no order with more than MAX_QUEUE_SHARE of that volume
@@ -74,12 +74,12 @@ order this module placed, in data/kalshi/orders/:
 
 Run --track after the games (and whenever else) to keep it current.
 
-    uv run --with cryptography -m cfb.kalshi_orders              # plan only
-    uv run --with cryptography -m cfb.kalshi_orders --execute    # place, after confirming
-    uv run --with cryptography -m cfb.kalshi_orders --cancel     # cancel ours (asks first)
-    uv run --with cryptography -m cfb.kalshi_orders --cancel-order Ohio --cancel-order "Southern Miss"
-    uv run --with cryptography -m cfb.kalshi_orders --smoke      # test the write path
-    uv run --with cryptography -m cfb.kalshi_orders --track      # save what became of our orders
+    uv run --with cryptography -m betting.orders              # plan only
+    uv run --with cryptography -m betting.orders --execute    # place, after confirming
+    uv run --with cryptography -m betting.orders --cancel     # cancel ours (asks first)
+    uv run --with cryptography -m betting.orders --cancel-order Ohio --cancel-order "Southern Miss"
+    uv run --with cryptography -m betting.orders --smoke      # test the write path
+    uv run --with cryptography -m betting.orders --track      # save what became of our orders
 
 Run cfb.week_parts first so the week's predictions are current.
 """
@@ -97,10 +97,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from cfb import kalshi_display as display
-
-from rappa import kalshi
-from rappa.kalshi import TICK, Client, KalshiError, maker_fee, parse_book, similarity, ticker_date
+from betting import display, kalshi
+from betting.kalshi import TICK, Client, KalshiError, maker_fee, parse_book, similarity, ticker_date
 
 log = logging.getLogger(__name__)
 
@@ -129,7 +127,7 @@ MIN_MATCH = 1.6        # summed name similarity (2 is a perfect match) to pair a
 #   MIN_CONTRACT_SHARE  a Kelly stake of at least this share of one contract buys one (whole contracts only); less
 #                       is skipped. At 0.5, a single contract is at most twice its Kelly stake.
 #   MAX_GAME_SHARE      no more than this share of the bankroll on one game: the biggest bet
-#   MAX_TOTAL_SHARE     no more than this share of the bankroll spent in a run (cfb.kalshi_daily: in a week)
+#   MAX_TOTAL_SHARE     no more than this share of the bankroll spent in a run (betting.daily: in a week)
 #   MAX_ORDERS          games a run places on. A count, not money, so it stays put as money is added: more money
 #                       makes each bet bigger, not the week's good games more
 # The money caps are shares of the bankroll, so sizes scale with it. Until 2026-10-09 they were dollars ($10 an
@@ -693,7 +691,7 @@ def our_orders(out):
 def track(client, out, now=None):
     """Save the state of every order this module placed: a snapshot of each order and its market, new fills,
     and settlements, under data/kalshi/orders/. Prints the resting, just-placed and recently filled orders
-    (cfb.kalshi_display.shown_orders), with profit where games are settled and totals over every order.
+    (betting.display.shown_orders), with profit where games are settled and totals over every order.
 
         orders.csv           one row per order, latest state, with the plan's numbers (RAPPA, book, fair, edge)
         order_snapshots.csv  every run's state of every order and its market, appended

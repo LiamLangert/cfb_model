@@ -5,11 +5,11 @@ predictions are cfb.predict_games', for the target week only: ratings from
 the season's plays before it (conferences, offseason shifts, quarterbacks
 and special teams included), shrunk toward last season's, and the points
 conversion fitted on every game played before the week since --since. The
-default, 2015, trains it as cfb.benchmark grades it. The week defaults to
+default, 2015, trains it as research.cfb_benchmark grades it. The week defaults to
 the next one: the first with an FBS-vs-FBS game still to be played. A week
 already played shows what the model would have said.
 
-Only FBS-vs-FBS games are predicted, as cfb.benchmark grades them: every FCS
+Only FBS-vs-FBS games are predicted, as research.cfb_benchmark grades them: every FCS
 opponent is rated as one pooled team.
 
 Each predicted home margin is a sum of parts, all in points, as
@@ -77,8 +77,7 @@ from cfb.predict_games import ALPHA, season_features, starters, unplayed, walk_f
 from cfb.ratings import (QB_REPLACEMENT, centered, conferences, continuous_week, fit_qbs, load,
                          qb_carries_as_dropbacks, qb_prior_means, qb_table)
 from nfl import key_numbers
-from nfl.benchmark import market_wp
-from rappa.games import FEATURES
+from rappa.games import FEATURES, market_wp
 from rappa.model import summarize
 
 log = logging.getLogger(__name__)
@@ -133,7 +132,7 @@ def sources(season, out, since=FIRST_SEASON):
     code = Path(__file__).resolve().parent
     files += [code / f for f in ("week_parts.py", "predict_games.py", "ratings.py", "outside.py",
                                  "offseason.py", "pace.py", "stage2.py")]
-    files += [code.parent / "nfl" / f for f in ("key_numbers.py", "benchmark.py", "predict_games.py", "pace.py")]
+    files += [code.parent / "nfl" / f for f in ("key_numbers.py", "predict_games.py", "pace.py")]
     files += [code.parent / "rappa" / f for f in ("model.py", "games.py", "special_teams.py", "expected_points.py",
                                                    "outside.py")]
     return [p for p in files if p.exists()]

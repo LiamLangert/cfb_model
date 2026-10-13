@@ -16,7 +16,7 @@ play can leak into the ratings.
   decay       Weight recent weeks more heavily, at several half-lives.
 
 Scoring unit is one team's offence in one game, keeping only units with enough
-plays for the average to mean anything (see rappa/validation.py).
+plays for the average to mean anything (see research/validation.py).
 """
 
 from __future__ import annotations
@@ -29,9 +29,9 @@ import pandas as pd
 
 from cfb.ratings import (FCS, HFA, PRIOR_WEIGHT, add_pre_play_margin, attach_game_context, classify,
                          fit, pool_fcs)
-from rappa import validation
 from rappa.model import GARBAGE_RULES, garbage_time, summarize
-from rappa.validation import correlate, predict_units, weighted_mse
+from research import validation
+from research.validation import correlate, predict_units, weighted_mse
 
 
 def load(season, out):

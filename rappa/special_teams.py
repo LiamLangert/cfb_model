@@ -37,7 +37,7 @@ themselves are walked forward (each league's predict_games).
             on the field for, summed: points a game against an average team,
             so it goes onto the margin at face value.
 
-Each league's module (cfb.special_teams, nfl.special_teams) turns its
+Each league's module (research.cfb_special_teams, nfl.special_teams) turns its
 play-by-play into the frame value_kicks reads, in CFBD's play types.
 
 How it was measured, walking forward on game margins:

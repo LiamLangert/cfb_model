@@ -29,7 +29,7 @@ The league term alone was worth 0.020 (0.95 of the margin), tempo alone
 
 Win probability is Phi(predicted / sigma), with sigma the one that gave the
 best log-loss on every FBS-vs-FBS game predicted before the week
-(win_probability). The sd of past misses, which nfl.benchmark uses and
+(win_probability). The sd of past misses, which research.nfl_benchmark uses and
 college used before, had been about right only because it was as much too
 wide as the margins were too big: with the margins fixed it cost 0.0004 of
 log-loss. With the fitted sigma, log-loss was level (+0.0001 +/- 0.0005).

@@ -1,6 +1,6 @@
 """Backtest NFL RAPPA: does it predict football that has not happened yet?
 
-The NFL counterpart of cfb.validate, and where the constants in nfl.ratings
+The NFL counterpart of research.cfb_validate, and where the constants in nfl.ratings
 come from. Every experiment fits on weeks 1-N of a season and
 scores on the weeks after, so no holdout play can leak into the ratings.
 
@@ -17,8 +17,8 @@ One NFL season is too short to settle any of these, so pass several: each
 (season, cut) is a row, and the mean across them is printed last. The prior
 experiment uses <out>/<season - 1>/rappa.csv and skips seasons without one.
 
-Scoring unit is one team's offence in one game, as in cfb.validate (see
-rappa/validation.py): correlation with the unit's actual mean epa (higher is
+Scoring unit is one team's offence in one game, as in research.cfb_validate (see
+research/validation.py): correlation with the unit's actual mean epa (higher is
 better) and play-weighted squared error (lower is better).
 """
 
@@ -32,7 +32,7 @@ import pandas as pd
 
 from nfl.ratings import CLIP, HFA, PRIOR_WEIGHT, fit, load
 from rappa.model import GARBAGE_RULES, garbage_time, summarize
-from rappa.validation import correlate, holdout_units, predict_units, weighted_mse
+from research.validation import correlate, holdout_units, predict_units, weighted_mse
 
 log = logging.getLogger(__name__)
 

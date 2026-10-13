@@ -6,8 +6,8 @@ included), shrunk toward last season's, and the points conversion fitted
 on every game already played in this season and the one before. The week
 can be one already played, to see what the model would have said.
 
-On 2023-2026 FBS-vs-FBS games, cfb.benchmark has these predictions about
-0.8 points a game worse than the closing line in MAE, and cfb.backtest_week
+On 2023-2026 FBS-vs-FBS games, research.cfb_benchmark has these predictions about
+0.8 points a game worse than the closing line in MAE, and research.cfb_backtest_week
 has never shown an edge against the spread - so read "lean" as
 disagreement, not as a bet.
 

@@ -10,13 +10,46 @@ so that a game's play values add up to its points. The same model runs on colleg
 (nflverse). Walk-forward game predictions are graded against the closing
 spread.
 
+## Using it
+
+Two scripts, run from the project root whenever you like:
+
+```
+./update.sh                # pull the latest games, re-rate both leagues, rebuild the site's data
+~/my_website/deploy.sh     # then publish it to fb.liamlangert.com
+./bets.sh                  # Kalshi: the orders so far, this week's plan, and place it if you say so
+```
+
+`./update.sh` is the whole update: both leagues' pulls (`--force`, for a
+season in progress), the season re-rated (college on last season's prior,
+the NFL standalone, as the repo's seasons are), then `site/build.py`. It
+defaults to the season in progress (from August; before that, last year's)
+and takes another as `./update.sh 2025`. It publishes nothing: deploy the
+website to put the update live. A league whose pull or re-rating fails is
+left as it was and the other is still rebuilt; the script then exits 1.
+Each run's output goes to data/logs/update-<date>.log.
+
+`./bets.sh` first saves and prints what became of every Kalshi order so far
+(fills, settlements, profit: `betting.orders --track`), then plans the rest
+of the week's college games at this moment's prices (`betting.daily`). Only
+games kicking off in the next 30 hours are placed; it shows those, reviews
+any resting orders (keep, cancel, or replace), and asks for a typed PLACE
+before sending anything. Later games are listed at today's prices with the
+week's budget held for them: run it again on a later day to place those.
+It builds the week's predictions first if they are missing or older than
+the latest pull. Extra arguments go to `betting.daily` (`--bankroll 50`,
+`--max-week-share`, ...; `uv run --with cryptography -m betting.daily --help`
+lists them). Each run's output goes to data/logs/bets-<date>.log. Nothing
+runs on a schedule.
+
 ## Layout
 
 ```
-rappa/              shared by both leagues
+update.sh           pull, re-rate and rebuild the site's data, for both leagues
+bets.sh             Kalshi: track the orders so far, plan the week, place after a typed PLACE
+rappa/              the model, shared by both leagues
   model.py          the ridge fit: plays in, team (and optionally passer and conference) ratings out
-  validation.py     scoring ratings on holdout plays, one team-game at a time
-  games.py          ratings -> game margins, graded against the spread
+  games.py          ratings -> game margins and win probabilities, graded against the spread
   special_teams.py  punt and kickoff ratings: each kick valued by expected points, units rated by ridge
   outside.py        special teams and penalties: every point outside the play ratings, per game, rated by team
   expected_points.py  expected points by down, distance and yards to goal, fitted on each season; each play's value in them
@@ -28,18 +61,13 @@ cfb/                college football, from CFBD and ESPN
   offseason.py      those turned into shifts of each team's prior
   ratings.py        CFBD play prep, passers from the play text, conferences, college constants, writes rappa.csv and qbs.csv
   outside.py        CFBD games for rappa.outside: special teams and penalties, added to the predicted margin
-  special_teams.py  CFBD punts and kickoffs for rappa.special_teams (not in predictions; outside.py counts kicks)
-  validate.py       backtests of the rating choices
   predict_games.py  walk-forward predictions across seasons, vs the market
-  predict_week.py   one week's predictions, laid out to read
   stage2.py         stage 2's edges scaled by each game's expected plays, and win probability's fitted sigma
-  week_parts.py     one week's predictions taken apart for the site: win probability, line, projected score, and the points from each factor
+  week_parts.py     one week's predictions taken apart: win probability, line, projected score, and the points from each factor
   pace.py           each team's pace and scoring so far, for week_parts' projected total
+  display.py        how the site shows a quarterback's share of the passing rating
   previous_week.py  the season rated without its latest week; which prior reproduces rappa.csv
   history.py        the site's weeks: ratings through each week, and every week's predictions
-  backtest_week.py  those predictions graded ATS, week by week
-  compare_espn.py   RAPPA and ESPN FPI graded ATS on the same games
-  benchmark.py      RAPPA, ESPN FPI and the market: MAE and log-loss by season
 nfl/                NFL, from nflverse and ESPN
   pull.py           plays, schedules (with closing lines), snap counts and week-1 rosters from nflverse
   pull_espn.py      ESPN FPI projections and weekly ratings
@@ -47,23 +75,32 @@ nfl/                NFL, from nflverse and ESPN
   ratings.py        nflverse play prep, NFL constants, writes rappa.csv and qbs.csv
   outside.py        nflverse games for rappa.outside: special teams and penalties, added to the predicted margin
   special_teams.py  nflverse plays in the frame rappa.special_teams and rappa.expected_points read
-  validate.py       backtests of the rating choices
   predict_games.py  walk-forward predictions across seasons, vs the market
   key_numbers.py    margins and scores that bunch on 3 and 7: a line set as the market sets one, and a score at it
   pace.py           each team's pace and points in its games so far, for the projected total
   predict_week.py   one week's predictions taken apart: win probability, line, projected score, and the points from each factor
   previous_week.py  the season rated without its latest week; which prior reproduces rappa.csv
   history.py        the site's weeks: ratings through each week, and every week's predictions
-  backtest_week.py  those predictions graded ATS, week by week
-  compare_espn.py   RAPPA and ESPN FPI graded ATS on the same games
-  benchmark.py      RAPPA, ESPN FPI and the market: MAE and log-loss by season
-site/               the data for the ratings page, which lives in the website (~/my_website/fb/)
-  build.py          gathers both leagues' weekly ratings and predictions into ~/my_website/fb/data/
-  weekly.sh         the Tuesday update: pulls, re-rates, then build.py (it publishes nothing)
+betting/            Kalshi, college games only
+  kalshi.py         the API client: signed requests, read-only unless asked, fees, order books, team names
+  orders.py         fair value, guards and Kelly sizing; placing, cancelling, and --track
+  daily.py          the week's plan, placed 2-30 hours before each kickoff, and the review of resting orders
+  display.py        the terminal tables
+research/           backtests and benchmarks; nothing above runs them
+  cfb_validate.py, nfl_validate.py          the rating choices, scored on holdout plays (validation.py)
+  cfb_benchmark.py, nfl_benchmark.py        RAPPA, ESPN FPI and the market: MAE and log-loss by season
+  cfb_compare_espn.py, nfl_compare_espn.py  RAPPA and ESPN FPI graded ATS on the same games
+  cfb_backtest_week.py, nfl_backtest_week.py  the walk-forward predictions graded ATS, week by week
+  cfb_predict_week.py                       one week's college predictions, laid out to read
+  cfb_special_teams.py                      CFBD punts and kickoffs for rappa.special_teams (not in predictions)
+site/build.py       gathers both leagues' weekly ratings and predictions into ~/my_website/fb/data/
+tests/              the Kalshi code's tests, with fake transports
 data/               not in git
-  cfb/<season>/     plays, games, lines, espn, fpi, teams, recruiting, returning, roster, player_defense, rappa, qbs, outside (cache), predictions_wkNN
+  cfb/<season>/     plays, games, lines, espn, fpi, teams, recruiting, returning, roster, player_defense, rappa, qbs, outside (cache), parts_wkNN
   cfb/coaches.csv   every FBS head coach's seasons
   nfl/<season>/     plays, games, snaps, roster_week1, espn, fpi, rappa, qbs, outside (cache)
+  kalshi/orders/    every order placed, its fills and settlements, each run's plan and review
+  logs/             each update.sh and bets.sh run's output
 ```
 
 Both leagues run the same pipeline: quarterbacks rated on their own, special
@@ -105,25 +142,31 @@ defaults.
 
 ```
 uv sync
-echo "CFBD_API_KEY=..." > .env    # only needed for cfb.pull
+echo "CFBD_API_KEY=..." > .env    # for cfb.pull
+# and KALSHI_ID, KALSHI_PRIVATE_KEY in .env for bets.sh
 ```
 
-## College
+The Kalshi code needs `cryptography`, which is not in the project's
+dependencies: run it with `uv run --with cryptography`, as bets.sh does. Its
+tests: `PYTHONPATH=. uv run --with cryptography --with pytest pytest tests/`.
 
-Run from the project root:
+## Rating seasons from scratch, and the research
+
+update.sh re-rates only the season in progress. The rest is by hand, from
+the project root. College:
 
 ```
 uv run -m cfb.pull 2025
 uv run -m cfb.pull_espn 2022 2023 2024 2025 2026
 uv run -m cfb.pull_offseason 2025
 uv run -m cfb.ratings 2025 --prior data/cfb/2024/rappa.csv
-uv run -m cfb.validate 2024 --prior data/cfb/2023/rappa.csv
 uv run -m cfb.predict_games 2022 2023 2024 2025 2026
-uv run -m cfb.predict_week 2026 5
 uv run -m cfb.week_parts 2026
-uv run -m cfb.backtest_week 2023 2024 2025 2026
-uv run -m cfb.compare_espn 2023 2024 2025 2026
-uv run -m cfb.benchmark 2015 2016 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026
+uv run -m research.cfb_validate 2024 --prior data/cfb/2023/rappa.csv
+uv run -m research.cfb_predict_week 2026 5
+uv run -m research.cfb_backtest_week 2023 2024 2025 2026
+uv run -m research.cfb_compare_espn 2023 2024 2025 2026
+uv run -m research.cfb_benchmark 2015 2016 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026
 ```
 
 The seasons chain: each season's rappa.csv and qbs.csv are the next one's
@@ -131,27 +174,27 @@ prior, so after changing a constant, re-rate them in order from the first
 (2014, which has no prior). `cfb.predict_games` and everything built on it
 pick the prior up from `data/cfb/<season - 1>/` by themselves, and the first
 season given is a warm-up for the points conversion. `--no-conferences` and
-`--no-offseason` (on cfb.ratings, cfb.predict_games and cfb.benchmark) run the
+`--no-offseason` (on cfb.ratings, cfb.predict_games and research.cfb_benchmark) run the
 model without conference ratings or offseason shifts; each needs a chain
-re-rated with the same flag. `cfb.benchmark` grades FBS-vs-FBS games only,
+re-rated with the same flag. `research.cfb_benchmark` grades FBS-vs-FBS games only,
 since every FCS opponent is rated as one pooled team. As with the NFL, it
 needs plays, games and rappa.csv from 2014, a warm-up for the points
 conversion and 2015's prior, and espn.csv from 2015. CFBD has moneylines only
 from 2021, so before that the market's win probability comes from its
 spread. It writes `data/cfb/benchmark.csv`.
 
-## NFL
+NFL:
 
 ```
 uv run nfl/pull.py 2023 2024 2025 2026
 uv run -m nfl.pull_espn 2023 2024 2025 2026
 uv run -m nfl.ratings 2025 --prior data/nfl/2024/rappa.csv
-uv run -m nfl.validate 2023 2024 2025
 uv run -m nfl.predict_games 2023 2024 2025 2026
 uv run -m nfl.predict_week 2026
-uv run -m nfl.backtest_week 2023 2024 2025 2026
-uv run -m nfl.compare_espn 2023 2024 2025 2026
-uv run -m nfl.benchmark 2015 2016 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026
+uv run -m research.nfl_validate 2023 2024 2025
+uv run -m research.nfl_backtest_week 2023 2024 2025 2026
+uv run -m research.nfl_compare_espn 2023 2024 2025 2026
+uv run -m research.nfl_benchmark 2015 2016 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026
 ```
 
 `nfl/pull.py` and `site/build.py` are run by path, not with `-m`. They
@@ -159,10 +202,10 @@ need nflreadpy, which needs pydantic 2, while cfbd needs pydantic 1, so they
 cannot share the project environment. Each declares its own dependencies
 inline (PEP 723), and uv only reads those when a script is run by path.
 
-`nfl.benchmark` needs plays, games and rappa.csv from 2014, and espn.csv
+`research.nfl_benchmark` needs plays, games and rappa.csv from 2014, and espn.csv
 from 2015, when ESPN's projections start. The returning-snap shifts need
 snaps.csv from 2014 and roster_week1.csv from 2015 (`--no-offseason` on
-nfl.predict_games and nfl.benchmark leaves them out). 2014 is only a warm-up
+nfl.predict_games and research.nfl_benchmark leaves them out). 2014 is only a warm-up
 for the points conversion and 2015's prior. It writes `data/nfl/benchmark.csv`.
 
 ## Site
@@ -207,9 +250,8 @@ minutes each): ratings, stage 2, sigma and the key-number fits all trained
 on the weeks before. The build keeps them in data/<league>/history.csv and
 redoes only the weeks not yet final, unless older data or the code changed.
 The weeks' score fits run in parallel, a thread each (`rappa.weeks`). The
-conference filter narrows both lists. Pull the latest schedule and plays
-(`uv run nfl/pull.py <season>`, `uv run -m cfb.pull <season>`) and rebuild
-to move a league on a week.
+conference filter narrows both lists. `./update.sh` pulls the latest
+schedule and plays and rebuilds, to move both leagues on a week.
 
 The build writes data.json (the leagues, their seasons and filters) and
 seasons/<league>/<season>.json, one file a season, which the page fetches
@@ -232,22 +274,3 @@ set to DNS only, as Vercel needs. Nothing here deploys: a rebuilt week goes
 live the next time the website is deployed. Every earlier deployment stays
 in the Vercel dashboard, and `vercel rollback <deployment url>` puts one
 back.
-
-### Every Tuesday
-
-```
-site/weekly.sh               # pull, re-rate and rebuild the page's data
-```
-
-`site/weekly.sh` is the whole week's update: both leagues' pulls (`--force`,
-for a season in progress), the season re-rated (college on last season's
-prior, the NFL standalone, as the repo's seasons are), then `site/build.py`.
-It does not publish; deploy the website to put the new week live.
-A league whose pull or re-rating fails is left as it was and the other is
-still rebuilt; the script then exits 1. From March through August it does
-nothing. Each run's output goes to data/logs/weekly-<date>.log.
-
-Windows Task Scheduler runs it every Tuesday at 10am, as the task "RAPPA
-weekly update". A run missed while the laptop was off happens when it is
-next on. It needs the Windows user to be logged in, and it can wake the
-laptop from sleep. It needs no Vercel login, as it publishes nothing.
