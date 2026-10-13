@@ -6,8 +6,9 @@ Two things, both for site/build.py:
                    that reproduces the season's rappa.csv (cfb.previous_week's
                    check: conferences, offseason shifts and quarterbacks, with or
                    without last season's prior), on the plays up to and
-                   including the week, with special teams on the same games'
-                   kicks. The last week's is rappa.csv itself.
+                   including the week, with special teams and penalties
+                   (cfb.outside) on the same games. The last week's is
+                   rappa.csv itself.
   predictions      every FBS-vs-FBS game cfb.week_parts' walk predicts, each
                    week from ratings on the weeks before it: win probability
                    and the score at RAPPA's line, projected as
@@ -33,7 +34,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from cfb import special_teams, stage2
+from cfb import outside, stage2
 from cfb.display import pass_level
 from cfb.previous_week import fit_plays, priors, same
 from cfb.ratings import FCS, GARBAGE, conferences, load, qb_carries_as_dropbacks
@@ -48,7 +49,8 @@ log = logging.getLogger(__name__)
 def ratings_by_week(season, out=Path("data/cfb")):
     """[(week, label, ratings, level)], a week at a time, or None when no fit reproduces the season's rappa.csv.
 
-    ratings are as rappa.csv holds them, plus st (points a game); level is
+    ratings are as rappa.csv holds them, plus st (special teams and penalties,
+    cfb.outside's value in points a game); level is
     cfb.display.pass_level on the plays through the week, for the page to
     move each conference's passing level onto its quarterbacks. Bowls and
     playoff games are one week (cfb.ratings.continuous_week), "Postseason".
@@ -62,12 +64,12 @@ def ratings_by_week(season, out=Path("data/cfb")):
     for prior in priors(season, out):
         if not same(fit_plays(plays, games, *prior), saved):
             continue
-        kicks = special_teams.load(season, out)
+        units, units_prior = outside.game_points(season, out), outside.prior(season, out)
         weeks = []
         for week in sorted(plays.week.unique()):
             through = plays[plays.week <= week]
             ratings = fit_plays(through, games, *prior)
-            ratings["st"] = special_teams.fit(kicks[kicks.game_id.isin(set(through.game_id))]).value
+            ratings["st"] = outside.fit(units[units.game_id.isin(set(through.game_id))], units_prior).value
             passes = qb_carries_as_dropbacks(through)
             dropbacks = passes[passes.play_kind == "pass"].offense.value_counts()
             fbs = ratings.drop(index=FCS, errors="ignore")
@@ -81,12 +83,13 @@ def ratings_by_week(season, out=Path("data/cfb")):
 
 def points_per_play(rows, season, week, min_train=200):
     """Stage 2's points a game for each unit of net, fitted on every game through the week: None before it has
-    min_train (walk_forward_predict's wait). As week_slate fits it, special teams taken off the margin first.
+    min_train (walk_forward_predict's wait). As week_slate fits it, special teams and penalties (points already)
+    taken off the margin first.
 
     Stage 2 scales each game's edges by its expected plays (cfb.stage2), so
     this is at the week's FBS-vs-FBS games' average plays_scale.
     """
-    st_points = rows.st_edge * special_teams.WEIGHT
+    st_points = rows.st_edge
     slot = rows.season * 100 + rows.week
     train = rows[rows.margin.notna() & (slot <= season * 100 + week)]
     if len(train) < min_train:
@@ -101,7 +104,7 @@ def points_per_play(rows, season, week, min_train=200):
 def week_scores(slot, rows, preds):
     """One week's FBS-vs-FBS games (slot is season * 100 + week) with each side's points at the line; None before
     there are games to fit on. rows and preds as predictions renames them."""
-    st_points = rows.st_edge * special_teams.WEIGHT
+    st_points = rows.st_edge
     slots = preds.season * 100 + preds.week
     slate = preds[slots == slot].copy()
     train = rows[rows.margin.notna() & (rows.season * 100 + rows.week < slot)]

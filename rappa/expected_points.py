@@ -13,15 +13,17 @@ own plays, so that a game's play values add up to its points:
             less this snap's EP (play_values). A node is a snap, a punt or a
             kickoff. A scoring play's next node is the kickoff after it, which
             counts zero: the kicking team's expected give-back of about 0.7
-            points is left out, as predicting with it was no better. A snap
-            with no node after it in its half has no value here.
+            points is left out, as predicting with it was no better. A half's
+            last snap looks ahead to the end of the half, which counts zero
+            too: its value is the points from it to the end of the half, less
+            its EP.
 
 Each league's loader turns its play-by-play into the frame these read, the
 same frame rappa.special_teams takes, plus each snap's distance:
 
     game_id, period, down (1-4 on a snap, else missing), distance,
     yards_to_goal, offense, home, play_type (CFBD's names), h, a (the home and
-    away score at the snap)
+    away score at the snap), h_after, a_after (and after the play)
 
 The EP curve is fitted on the whole season, so a week's play values use a
 curve that has seen later weeks. It is league-wide, not a team's: valuing
@@ -36,6 +38,17 @@ halves. CFBD's ppa correlates 0.85-0.93 with these values; it charges about
 0.5 points more for a turnover, values third and fourth downs differently,
 and leaves out the kickoff after a score. With the give-back counted, MAE
 was -0.044 +/- 0.023.
+
+Until 2026-10-09 a half's last snap had no value here, and each league's
+loader fell back to the provider's (CFBD's ppa, nflverse's epa). Valuing it
+against the end of the half instead was worth log-loss -0.0004 +/- 0.0003
+in college's benchmark over 2015-2026 (better in 8 of 12 seasons; MAE
+level) and -0.0004 +/- 0.0002 in the NFL's (9 of 12; MAE -0.005), and
+-0.0010 +/- 0.0008 on the 2025-2026 college games Kalshi priced. Putting the time
+left in the half into the EP curve, so that a drive reaching the opponent's
+30 with seconds left is worth what it usually scores, did worse: log-loss
++0.0013 +/- 0.0003 (worse in 10 of 12 seasons), as late yards still say how
+good an offence is and whether the drive scores in time says little more.
 """
 
 from __future__ import annotations
@@ -122,29 +135,52 @@ def fit(plays):
     return ep
 
 
-def play_values(plays, ep=None):
-    """Each snap's value to its offence in points (see the module docstring), on plays' index; NaN where it has none.
+def node_values(plays, ep=None):
+    """Every node's value to its side in points, on plays' index; NaN off the nodes.
 
-    plays must be in game order. ep is a fitted curve, fitted on plays when None.
+    A node is a snap of any kind (penalties and field goals too), a punt or a
+    kickoff, and its side is the row's offence: for a kickoff, the kicking
+    team, as CFBD has it and nfl.special_teams.plays_frame copies. A kickoff's
+    own EP counts zero, as the scoring play before it sees it, so its value is
+    the points before the next node plus that node's EP from the kicking side:
+    what the kick and its return earned. In each half the nodes' values add up
+    to the change in the score. plays must be in game order; ep is a fitted
+    curve, fitted on plays when None.
     """
     ep = fit(plays) if ep is None else ep
     down = plays.down.where(plays.down.between(1, 4))
     snap = down.notna() & ~plays.play_type.isin(NOT_SNAPS) & plays.offense.notna()
     node = (snap | plays.play_type.isin(KICKOFFS) | plays.play_type.isin(PUNTS)) & plays.offense.notna()
     node &= plays.period.between(1, 5)
-    n = plays[node].assign(down=down[node])
-    n = n.assign(half=np.where(n.period <= 2, 1, np.where(n.period <= 4, 2, 3)))
+    half = pd.Series(np.where(plays.period <= 2, 1, np.where(plays.period <= 4, 2, 3)), index=plays.index)
+    # The score when each half (overtime's first period the third) ends.
+    timed = plays.period.between(1, 5)
+    end = plays[timed].assign(half=half[timed]).groupby(["game_id", "half"])[["h_after", "a_after"]].max()
+    n = plays[node].assign(down=down[node], half=half[node])
     kickoff = n.play_type.isin(KICKOFFS)
-    n = n.assign(ep=np.where(kickoff, np.nan, ep(n.down.fillna(4), n.distance.fillna(10), n.yards_to_goal)))
+    n = n.assign(ep=np.where(kickoff, 0.0, ep(n.down.fillna(4), n.distance.fillna(10), n.yards_to_goal)))
     by = n.groupby(["game_id", "half"])
-    nxt = {c: by[c].shift(-1) for c in ("ep", "offense", "h", "a", "play_type")}
-    keep = nxt["offense"].notna() & n.down.between(1, 4)
-    n = n[keep]
-    nxt = {c: v[keep] for c, v in nxt.items()}
+    nxt = {c: by[c].shift(-1) for c in ("ep", "offense", "h", "a")}
+    # A half's last node looks ahead to the half's end: the score then, and nothing more to come.
+    last = nxt["offense"].isna().to_numpy()
+    at_end = end.reindex(pd.MultiIndex.from_arrays([n.game_id, n.half]))
+    nxt["h"] = nxt["h"].where(~last, at_end.h_after.to_numpy())
+    nxt["a"] = nxt["a"].where(~last, at_end.a_after.to_numpy())
+    nxt["ep"] = nxt["ep"].where(~last, 0.0)
+    nxt["offense"] = nxt["offense"].where(~last, n.offense)
     home_off = (n.offense == n.home).to_numpy()
     dh, da = (nxt["h"] - n.h).to_numpy(), (nxt["a"] - n.a).to_numpy()
     points = np.where(home_off, dh - da, da - dh)
     same = (nxt["offense"] == n.offense).to_numpy()
-    after_kickoff = nxt["play_type"].isin(KICKOFFS).to_numpy()
-    then = np.where(after_kickoff, 0.0, np.where(same, nxt["ep"], -nxt["ep"]))
+    then = np.where(same, nxt["ep"], -nxt["ep"])
     return pd.Series(points + then - n.ep.to_numpy(), index=n.index).reindex(plays.index)
+
+
+def play_values(plays, ep=None):
+    """Each snap's value to its offence in points (see the module docstring), on plays' index; NaN where it has none.
+
+    node_values on the snaps: a scoring play's next node, the kickoff, counts zero. plays must be in game
+    order. ep is a fitted curve, fitted on plays when None.
+    """
+    down = plays.down.where(plays.down.between(1, 4))
+    return node_values(plays, ep).where(down.notna() & ~plays.play_type.isin(KICKOFFS))

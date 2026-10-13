@@ -29,7 +29,7 @@ offences, so both compare across conferences. The two parts add up to the
 same.
     rush defence   rush_def and pass_def at the same shares, times the
     pass defence   coefficient on the other side's edge
-    special teams  the punt and kickoff gap, at face value (cfb.special_teams.WEIGHT)
+    special teams  special teams and penalties: cfb.outside's gap, at its WEIGHT
 
 A team's units are its conference's rating plus its own gap from it
 (cfb.ratings.conferences); the parts count both. Every team part is that
@@ -70,7 +70,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from cfb import pace, special_teams, stage2
+from cfb import outside, pace, stage2
 from cfb.display import QB_SHARE, pass_level, with_pass_level
 from cfb.offseason import prior_shift
 from cfb.predict_games import ALPHA, season_features, starters, unplayed, walk_forward_predict
@@ -131,10 +131,11 @@ def sources(season, out, since=FIRST_SEASON):
     files += [out / str(s) / "roster.csv" for s in range(since, season + 1)]
     files += [out / str(s) / "player_defense.csv" for s in range(since - 1, season)]
     code = Path(__file__).resolve().parent
-    files += [code / f for f in ("week_parts.py", "predict_games.py", "ratings.py", "special_teams.py",
+    files += [code / f for f in ("week_parts.py", "predict_games.py", "ratings.py", "outside.py",
                                  "offseason.py", "pace.py", "stage2.py")]
     files += [code.parent / "nfl" / f for f in ("key_numbers.py", "benchmark.py", "predict_games.py", "pace.py")]
-    files += [code.parent / "rappa" / f for f in ("model.py", "games.py", "special_teams.py", "expected_points.py")]
+    files += [code.parent / "rappa" / f for f in ("model.py", "games.py", "special_teams.py", "expected_points.py",
+                                                   "outside.py")]
     return [p for p in files if p.exists()]
 
 
@@ -194,8 +195,8 @@ def week_ratings(season, week, out, alpha, prior_weight):
         qbs = pd.concat([qbs, start_at[carried]])
     level = before.passer[before.play_kind == "pass"].dropna().map(qbs).mean()
     dropbacks = before.passer[before.play_kind == "pass"].value_counts()
-    kicks = special_teams.load(season, out)
-    st = special_teams.fit(kicks[kicks.week < week]).value
+    units = outside.game_points(season, out)
+    st = outside.fit(units[units.week < week], outside.prior(season, out)).value
     return (centered(ratings), qbs - level, QB_REPLACEMENT - level, dropbacks, carried, names,
             float((before.play_kind == "rush").mean()), st, games)
 
@@ -223,10 +224,10 @@ def take_apart(slate, model, ratings, qb, rush_share, st):
         parts[f"{side}_rush_def_pts"] = -their_b * rush_share * r.rush_def.to_numpy()
         parts[f"{side}_pass_def_pts"] = defence - parts[f"{side}_rush_def_pts"]
     home_st, away_st = (slate[f"{side}_team"].map(st).to_numpy() for side in ("home", "away"))
-    # As cfb.predict_games: a team with no kicks yet makes the gap zero.
+    # As cfb.predict_games: values are points already, and a team never rated makes the gap zero.
     missing = np.isnan(home_st) | np.isnan(away_st)
-    parts["home_special_teams_pts"] = np.where(missing, 0.0, special_teams.WEIGHT * home_st)
-    parts["away_special_teams_pts"] = np.where(missing, 0.0, special_teams.WEIGHT * away_st)
+    parts["home_special_teams_pts"] = np.where(missing, 0.0, home_st)
+    parts["away_special_teams_pts"] = np.where(missing, 0.0, away_st)
     parts["home_home_field_pts"] = model.intercept_ + b_neutral * slate.neutral_site.to_numpy()
     parts["away_home_field_pts"] = np.zeros(len(slate))
     return pd.DataFrame(parts, index=slate.index)
@@ -254,7 +255,7 @@ def week_slate(rows, preds, season, week, out, alpha=ALPHA, prior_weight=None):
     slot = season * 100 + week
 
     # Stage 2 again, for its coefficients: fitted on the same games as walk_forward_predict.
-    st_points = rows.st_edge * special_teams.WEIGHT
+    st_points = rows.st_edge
     train = rows[rows.margin.notna() & (rows.season * 100 + rows.week < slot)]
     model = LinearRegression().fit(stage2.design(train), train.margin - st_points[train.index])
     # The total, on FBS-vs-FBS games, split by the predicted margin.

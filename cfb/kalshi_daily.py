@@ -429,6 +429,9 @@ def show_week(spent, events, budget, max_games, reviews, planned, max_lead=MAX_L
 
 def run_day(client, season, week, out, now, args, confirm=input, notify=toast):
     games = ko.load_week(season, week, out, now)
+    if games.empty:  # Saturday night to Sunday: the week is played out and the next one not pulled yet
+        print(f"every game of week {week} has kicked off: nothing to plan")
+        return 0
     first, last = week_days(pd.read_csv(out / str(season) / f"parts_wk{week:02d}.csv"))
     markets = client.pages("/markets", "markets", series_ticker=ko.SERIES, status="open", limit=1000)
     matches = ko.match_events(games, markets)

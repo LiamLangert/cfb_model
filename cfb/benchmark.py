@@ -8,9 +8,9 @@ season_table do the scoring):
               a coin flip scores ln 2 = 0.693.
 
 RAPPA's margins are cfb.predict_games's, walked forward the same way,
-conferences, offseason shifts, quarterbacks and special teams included
-unless --no-conferences, --no-offseason, --no-qbs or --no-special-teams is
-given. It has no win probability of its own, so it gets a normal one:
+conferences, offseason shifts, quarterbacks and special teams and penalties
+(cfb.outside) included unless --no-conferences, --no-offseason, --no-qbs or
+--no-special-teams is given. It has no win probability of its own, so it gets a normal one:
 P(home win) = Phi(predicted / sigma), where sigma is the one with the best
 log-loss on every FBS-vs-FBS game it predicted before that week
 (cfb.stage2.win_probability). ESPN's are
@@ -107,7 +107,8 @@ def parse_args(argv=None):
                    help="games the conversion, and sigma, need before RAPPA predicts (default: 200)")
     p.add_argument("--alpha", type=float, default=ALPHA)
     p.add_argument("--prior-weight", type=float, help="one weight for every unit (default: cfb.ratings's, by side)")
-    p.add_argument("--no-special-teams", action="store_true", help="leave special teams out of RAPPA's margin")
+    p.add_argument("--no-special-teams", action="store_true",
+                   help="leave special teams and penalties out of RAPPA's margin")
     p.add_argument("--no-qbs", action="store_true", help="leave quarterbacks in their teams' pass offence")
     p.add_argument("--no-conferences", action="store_true",
                    help="rate teams without conference ratings (needs priors rated with cfb.ratings "
@@ -122,7 +123,7 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    for name in ("rappa", "cfb.ratings", "cfb.special_teams", "cfb.predict_games"):
+    for name in ("rappa", "cfb.ratings", "cfb.outside", "cfb.predict_games"):
         logging.getLogger(name).setLevel(logging.WARNING)
     seasons = sorted(args.seasons)
 

@@ -7,8 +7,8 @@ without last season's prior, whichever reproduces rappa.csv from the
 season's plays (the repo's NFL seasons are rated without one). So the
 latest week's plays are the only difference from rappa.csv, and a rappa.csv
 that neither reproduces (rated before the latest plays were pulled, or with
-other options) gets nothing. Special teams are rated on the same weeks'
-kicks (nfl.special_teams), as the rank counts them.
+other options) gets nothing. Special teams and penalties are rated on the
+same weeks' games (nfl.outside), as the rank counts them.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from nfl import special_teams
+from nfl import outside
 from nfl.ratings import SEASON_ALPHA, fit_qbs, in_fit, load, with_qb_runs
 from rappa.model import UNITS, summarize
 
@@ -32,10 +32,10 @@ def sources(season, out=Path("data/nfl")):
     The season's rappa.csv stands in for the prior: re-rating after it
     changes rewrites it.
     """
-    files = [out / str(season) / f for f in ("plays.csv", "rappa.csv")]
+    files = [out / str(season) / f for f in ("plays.csv", "games.csv", "rappa.csv")]
     code = Path(__file__).resolve().parent
-    files += [code / f for f in ("previous_week.py", "ratings.py", "special_teams.py")]
-    files += [code.parent / "rappa" / f for f in ("model.py", "special_teams.py", "expected_points.py")]
+    files += [code / f for f in ("previous_week.py", "ratings.py", "special_teams.py", "outside.py")]
+    files += [code.parent / "rappa" / f for f in ("model.py", "special_teams.py", "expected_points.py", "outside.py")]
     return [p for p in files if p.exists()]
 
 
@@ -67,8 +67,8 @@ def same(ratings, saved):
 def rate(season, out=Path("data/nfl")):
     """(week, ratings): the season's latest week with plays, and the team ratings on the plays before it.
 
-    ratings also holds st, each team's special teams (points a game) on the
-    kicks before the week. None when the latest week is the first, with
+    ratings also holds st, each team's special teams and penalties
+    (nfl.outside's value, points a game) on the games before the week. None when the latest week is the first, with
     nothing before it, or when no fit reproduces the season's rappa.csv.
     """
     plays = in_fit(load(season, out))
@@ -80,8 +80,8 @@ def rate(season, out=Path("data/nfl")):
     for prior in priors(season, out):
         if same(fit_plays(plays, *prior), saved):
             ratings = fit_plays(before, *prior)
-            kicks = special_teams.load(season, out)
-            ratings["st"] = special_teams.fit(kicks[kicks.week < week]).value
+            units = outside.game_points(season, out)
+            ratings["st"] = outside.fit(units[units.week < week], outside.prior(season, out)).value
             return int(week), ratings
     log.warning("%d: no fit of plays.csv reproduces rappa.csv - re-rate with `uv run -m nfl.ratings %d` "
                 "to rank against last week", season, season)

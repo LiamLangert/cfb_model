@@ -21,9 +21,10 @@ Each team's prior is shifted by what changed over the offseason - its
 recruiting, returning production and coaching (cfb.offseason). A team that has
 not played yet is rated at its prior, plus its conference's rating so far.
 
-Special teams are rated alongside stage 1 from the season's punts and
-kickoffs (cfb.special_teams), and the gap between the two teams goes onto
-the margin at face value; stage 2 is fitted on what is left.
+Special teams and penalties - every point in a game outside the plays
+stage 1 rates (cfb.outside) - are rated alongside it from the season's games
+so far, and cfb.outside.WEIGHT times the gap between the two teams goes onto
+the margin; stage 2 is fitted on what is left.
 
 As in the NFL version:
 
@@ -52,7 +53,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from cfb import special_teams, stage2
+from cfb import outside, stage2
 from cfb.offseason import prior_shift
 from cfb.ratings import (FCS, QB_REPLACEMENT, centered, conferences, fit, fit_qbs, load, prior_weights,
                          qb_carries_as_dropbacks, qb_prior_means)
@@ -117,7 +118,8 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
     members = conferences(games) if use_conferences else None
     games = games.assign(season=season, neutral_site=games.neutral_site.astype(int),
                          fbs=games.home_team.ne(FCS) & games.away_team.ne(FCS))
-    kicks = special_teams.load(season, out) if use_special_teams else None
+    units = outside.game_points(season, out) if use_special_teams else None
+    units_prior = outside.prior(season, out) if use_special_teams and use_prior else None
     prior_path = out / str(season - 1) / "rappa.csv"
     prior = qb_prior = None
     if use_prior and prior_path.exists():
@@ -172,9 +174,9 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
             slate = qb_edges(slate, centered(ratings), rush_share, qb_rating)
         else:
             slate = add_edges(slate, ratings)
-        if kicks is not None:
-            # A team with no punts or kickoffs yet counts as average.
-            value = special_teams.fit(kicks[kicks.week < week]).value
+        if units is not None:
+            # Points on the margin, cfb.outside.WEIGHT times the rating gap; a team never rated counts as average.
+            value = outside.fit(units[units.week < week], units_prior).value
             slate["st_edge"] = (slate.home_team.map(value) - slate.away_team.map(value)).fillna(0.0)
         rows.append(slate)
         log.info("%d week %2d: %3d games rated on %6d prior plays", season, week, len(slate), len(before))
@@ -185,10 +187,11 @@ def walk_forward_predict(rows, min_train):
     """Fit the points conversion on every game played before this week, predict the week.
 
     rows need cfb.stage2.with_scale's plays_scale, which the edges are scaled
-    by (cfb.stage2.design). Special teams, when rows has them, go onto the
-    margin at face value, so the conversion is fitted on what they leave.
+    by (cfb.stage2.design). Special teams and penalties, when rows has them,
+    are already points (cfb.outside's value) and go onto the margin as they
+    are, so the conversion is fitted on what they leave.
     """
-    st = rows.st_edge * special_teams.WEIGHT if "st_edge" in rows else 0.0
+    st = rows.st_edge if "st_edge" in rows else 0.0
     rows = rows.assign(slot=rows.season * 100 + rows.week, st_points=st)
     played = rows[rows.margin.notna()]
     preds = []
@@ -298,7 +301,8 @@ def parse_args(argv=None):
     p.add_argument("--prior-weight", type=float,
                    help="carry this much of last season for every unit (default: cfb.ratings's, by side)")
     p.add_argument("--no-prior", action="store_true", help="fit every season from scratch")
-    p.add_argument("--no-special-teams", action="store_true", help="leave special teams out of the margin")
+    p.add_argument("--no-special-teams", action="store_true",
+                   help="leave special teams and penalties (cfb.outside) out of the margin")
     p.add_argument("--no-qbs", action="store_true", help="leave quarterbacks in their teams' pass offence")
     p.add_argument("--no-conferences", action="store_true",
                    help="rate teams without conference ratings (needs priors rated with cfb.ratings "
@@ -314,7 +318,7 @@ def main(argv=None):
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     # Four seasons are ~70 fits, and fit logs three lines for each.
-    for name in ("rappa", "cfb.ratings", "cfb.special_teams"):
+    for name in ("rappa", "cfb.ratings", "cfb.outside"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
     preds = predict(args.seasons, args.out, args.start_week, args.alpha, args.prior_weight, not args.no_prior,

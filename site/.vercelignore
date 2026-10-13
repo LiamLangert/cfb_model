@@ -1,7 +1,0 @@
-# Only the page and its data go to Vercel.
-build.py
-deploy.sh
-weekly.sh
-__pycache__
-.env*
-.gitignore

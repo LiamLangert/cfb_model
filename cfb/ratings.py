@@ -408,12 +408,17 @@ def qb_carries_as_dropbacks(df):
                      passer_name=df.passer_name.mask(carry, df.rusher_name))
 
 
-def snap_scores(plays):
-    """Each play's home and away score at the snap, plays in game order (CFBD reports them after it)."""
+def scores_after(plays):
+    """Each play's home and away score after it, plays in game order, as CFBD reports them (never falling)."""
     home_off = plays.offense == plays.home
     home = pd.Series(np.where(home_off, plays.offense_score, plays.defense_score), index=plays.index)
     away = pd.Series(np.where(home_off, plays.defense_score, plays.offense_score), index=plays.index)
-    home, away = home.groupby(plays.game_id).cummax(), away.groupby(plays.game_id).cummax()
+    return home.groupby(plays.game_id).cummax(), away.groupby(plays.game_id).cummax()
+
+
+def snap_scores(plays):
+    """Each play's home and away score at the snap, plays in game order (CFBD reports them after it)."""
+    home, away = scores_after(plays)
     pre = pd.DataFrame({"h": home, "a": away}).groupby(plays.game_id).shift(1).fillna(0)
     return pre.h, pre.a
 
@@ -422,8 +427,9 @@ def own_values(plays):
     """Each play's value in our own expected points (rappa.expected_points), on the season's full play-by-play
     in game order: NaN where a play has none."""
     h, a = snap_scores(plays)
+    h_after, a_after = scores_after(plays)
     frame = plays[["game_id", "period", "down", "distance", "yards_to_goal", "offense", "home", "play_type"]]
-    return expected_points.play_values(frame.assign(h=h, a=a))
+    return expected_points.play_values(frame.assign(h=h, a=a, h_after=h_after, a_after=a_after))
 
 
 def load(season, out, own_ep=None):

@@ -283,7 +283,8 @@ def test_top_ups_take_no_game_slot_but_compete_for_the_money():
         held = {matches[small]["event"]: {"ticker": matches[small]["home"]["ticker"], "contracts": 1.0, "cost": 0.55}}
         if big == 0:  # the held game has the bigger edge
             games.loc[0, "rappa_wp"], games.loc[1, "rappa_wp"] = 0.74, 0.66
-        p = ko.plan(games, matches, books, set(), NOW, 2026, 6, bankroll=BANKROLL, held=held, max_total_cost=6.0)  # room for one
+        p = ko.plan(games, matches, books, set(), NOW, 2026, 6, bankroll=BANKROLL, held=held, max_total_cost=6.0,
+                    kelly=1.0)  # room for one
         assert list(p[p.decision == "order"].game_id) == [big]
 
 
@@ -423,6 +424,17 @@ def test_dry_run_sends_nothing_and_logs_the_plan(week):
     logged = pd.read_csv(out.parent / "kalshi" / "orders" / "2026_wk06.csv")
     assert set(logged["mode"]) == {"plan"}
     assert (logged.decision == "order").sum() == 2  # Ohio State and Oklahoma; Georgia-Alabama is too close
+
+
+def test_a_week_played_out_has_nothing_to_plan(week, capsys):
+    out, mk, books = week
+    client = FakeKalshi(mk, books, read_only=False)
+    sunday = datetime(2026, 10, 11, 17, 0, tzinfo=timezone.utc)  # every fixture game kicked off Saturday
+    assert ko.main(["--season", "2026", "--week", "6", "--out", str(out), "--execute", "--yes"], client=client,
+                   now=sunday) == 0
+    assert client.posts == [] and client.deletes == []
+    assert "every game of week 6 has kicked off" in capsys.readouterr().out
+    assert not (out.parent / "kalshi" / "orders" / "2026_wk06.csv").exists()
 
 
 def test_execute_needs_the_typed_confirmation(week):
@@ -679,10 +691,10 @@ def test_kelly_share():
     assert ko.kelly_share(0.6672, c) == pytest.approx((0.6672 - c) / (1 - c))
 
 
-def test_default_is_full_kelly():
-    assert ko.KELLY_FRACTION == 1.0 and ko.parse_args([]).kelly == 1.0
+def test_default_is_half_kelly():
+    assert ko.KELLY_FRACTION == 0.5 and ko.parse_args([]).kelly == 0.5
     c = 0.5 + maker_fee(0.5)
-    assert ko.contracts(0.6, c, 20, max_game_share=1)[1] == pytest.approx(ko.kelly_share(0.6, c) * 20)
+    assert ko.contracts(0.6, c, 20, max_game_share=1)[1] == pytest.approx(0.5 * ko.kelly_share(0.6, c) * 20)
 
 
 def test_contracts_kelly_fraction_whole_contracts():
@@ -692,8 +704,8 @@ def test_contracts_kelly_fraction_whole_contracts():
     game_cap = ko.MAX_GAME_SHARE * 100
     assert stake == pytest.approx(ko.KELLY_FRACTION * f * 100) and n == math.floor(min(stake, game_cap) / c)
     assert ko.contracts(0.6, c, 100, max_order_cost=5)[0] == math.floor(min(stake, game_cap, 5) / c)  # fixed cap on top
-    n, stake = ko.contracts(0.6, c, 100, kelly=0.5, max_game_share=1)
-    assert stake == pytest.approx(0.5 * f * 100) and n == math.floor(stake / c)  # --kelly 0.5 still sizes at half
+    n, stake = ko.contracts(0.6, c, 100, kelly=1.0, max_game_share=1)
+    assert stake == pytest.approx(f * 100) and n == math.floor(stake / c)  # --kelly 1 still sizes at full
 
 
 def test_contracts_rounds_up_to_one_only_from_half_a_contract():
@@ -715,7 +727,7 @@ def test_contracts_caps():
 
 def test_sizes_and_the_run_cap_scale_with_the_bankroll():
     games, matches, books = many(12)
-    plans = {b: ko.plan(games, matches, books, set(), NOW, 2026, 6, bankroll=b) for b in (50, 5000)}
+    plans = {b: ko.plan(games, matches, books, set(), NOW, 2026, 6, bankroll=b, kelly=1.0) for b in (50, 5000)}
     for bankroll, p in plans.items():
         orders = p[p.decision == "order"]
         assert len(orders) and orders.cost.sum() <= ko.MAX_TOTAL_SHARE * bankroll + 1e-9

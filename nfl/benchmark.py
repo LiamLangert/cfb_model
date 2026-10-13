@@ -8,9 +8,9 @@ directly:
               a coin flip scores ln 2 = 0.693.
 
 RAPPA's margins are nfl.predict_games's, walked forward the same way,
-quarterbacks, special teams, rest and the returning-snap shifts of the
-prior (nfl.offseason) included unless --no-qbs, --no-special-teams, --no-rest
-or --no-offseason is given. Games are predicted with the
+quarterbacks, special teams and penalties (nfl.outside), rest and the
+returning-snap shifts of the prior (nfl.offseason) included unless --no-qbs,
+--no-special-teams, --no-rest or --no-offseason is given. Games are predicted with the
 quarterback who actually started them, which is known before kickoff. It has
 no win probability of its own, so it gets the usual normal one: P(home win)
 = Phi(predicted / sigma), where sigma is the sd of RAPPA's misses on every
@@ -147,7 +147,8 @@ def parse_args(argv=None):
                    help="games the conversion, and sigma, need before RAPPA predicts (default: 100)")
     p.add_argument("--alpha", type=float, default=ALPHA)
     p.add_argument("--prior-weight", type=float, help="one weight for every unit (default: nfl.ratings's, by side)")
-    p.add_argument("--no-special-teams", action="store_true", help="leave special teams out of RAPPA's margin")
+    p.add_argument("--no-special-teams", action="store_true",
+                   help="leave special teams and penalties out of RAPPA's margin")
     p.add_argument("--no-qbs", action="store_true", help="leave quarterbacks in their teams' pass offence")
     p.add_argument("--no-rest", action="store_true", help="leave the rest gap out of RAPPA's margin")
     p.add_argument("--no-offseason", action="store_true", help="leave the prior unshifted by returning snaps")

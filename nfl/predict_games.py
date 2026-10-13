@@ -17,10 +17,11 @@ for a game not yet played without one, the team's most recent starter. A
 starter who has not played yet this season counts at his prior - last
 season's rating carried over, or replacement level.
 
-Two things go onto the margin at face value, and stage 2 is fitted on what
-is left: the special-teams gap, rated alongside stage 1 from the season's
-punts and kickoffs (nfl.special_teams), and the rest gap at the market's
-price (REST_WEIGHT).
+Two things go onto the margin as points, and stage 2 is fitted on what is
+left: the gap in special teams and penalties - every point outside the
+plays stage 1 rates, rated alongside it from the season's games so far, at
+rappa.outside.WEIGHT (nfl.outside) - and the rest gap at the market's price
+(REST_WEIGHT).
 
 Where it differs from the college version:
 
@@ -44,7 +45,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from nfl import offseason, special_teams
+from nfl import offseason, outside
 from nfl.ratings import QB_REPLACEMENT, centered, fit, fit_qbs, in_fit, load, qb_prior_means, with_qb_runs
 from rappa.games import FEATURES, add_edges, against_the_spread, score
 from rappa.model import summarize
@@ -140,7 +141,8 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
     plays, games = in_fit(load(season, out)), load_games(season, out)
     if use_rest:
         games["rest_edge"] = (games.home_rest - games.away_rest).clip(-REST_CLIP, REST_CLIP).fillna(0.0)
-    kicks = special_teams.load(season, out) if use_special_teams else None
+    units = outside.game_points(season, out) if use_special_teams else None
+    units_prior = outside.prior(season, out) if use_special_teams and use_prior else None
     prior_path = out / str(season - 1) / "rappa.csv"
     prior = qb_prior = None
     if use_prior and prior_path.exists():
@@ -188,9 +190,9 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
                                 shift=offseason.faded(shift, week))
             ratings = summarize(ratings, before)
             slate = add_edges(slate, ratings)
-        if kicks is not None:
-            # A team with no punts or kickoffs yet counts as average.
-            value = special_teams.fit(kicks[kicks.week < week]).value
+        if units is not None:
+            # Points on the margin, rappa.outside.WEIGHT times the rating gap; a team never rated counts as average.
+            value = outside.fit(units[units.week < week], units_prior).value
             slate["st_edge"] = (slate.home_team.map(value) - slate.away_team.map(value)).fillna(0.0)
         rows.append(slate)
         log.info("%d week %2d: %2d games rated on %5d prior plays", season, week, len(slate), len(before))
@@ -200,10 +202,11 @@ def season_features(season, out, start_week, alpha, prior_weight, use_prior, use
 def walk_forward_predict(rows, min_train):
     """Fit the points conversion on every game played before this week, predict the week.
 
-    Special teams and rest, when rows has them, go onto the margin at face
-    value, so the conversion is fitted on what they leave.
+    Special teams and penalties (points already, nfl.outside's value) and
+    rest, when rows has them, go onto the margin as they are, so the
+    conversion is fitted on what they leave.
     """
-    face = rows.st_edge * special_teams.WEIGHT if "st_edge" in rows else 0.0
+    face = rows.st_edge if "st_edge" in rows else 0.0
     if "rest_edge" in rows:
         face = face + REST_WEIGHT * rows.rest_edge
     rows = rows.assign(slot=rows.season * 100 + rows.week, face_points=face)
@@ -277,7 +280,8 @@ def parse_args(argv=None):
                    help="carry this much of last season for every unit (default: nfl.ratings's, by side)")
     p.add_argument("--no-prior", action="store_true", help="fit every season from scratch")
     p.add_argument("--no-offseason", action="store_true", help="leave the prior unshifted by returning snaps")
-    p.add_argument("--no-special-teams", action="store_true", help="leave special teams out of the margin")
+    p.add_argument("--no-special-teams", action="store_true",
+                   help="leave special teams and penalties (nfl.outside) out of the margin")
     p.add_argument("--no-qbs", action="store_true", help="leave quarterbacks in their teams' pass offence")
     p.add_argument("--no-rest", action="store_true", help="leave the rest gap out of the margin")
     p.add_argument("--save", type=Path, help="write per-game predictions, upcoming included, here")

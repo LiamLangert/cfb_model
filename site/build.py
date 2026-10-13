@@ -2,10 +2,13 @@
 # requires-python = ">=3.12"
 # dependencies = ["nflreadpy>=0.1.5", "numpy>=2", "pandas>=3", "scipy>=1.14", "scikit-learn>=1.5"]
 # ///
-"""Gather both leagues' ratings and predictions, week by week, into site/data.json and site/seasons/ for index.html.
+"""Gather both leagues' ratings and predictions, week by week, into the data the ratings page reads.
 
-Run with `uv run site/build.py`, then serve the folder:
-    python3 -m http.server 8000 -d site
+The page is part of the website, ~/my_website/fb/index.html, and this writes its data beside it, in
+~/my_website/fb/data/ (data.json and seasons/); RAPPA_SITE_DATA=<folder> writes it elsewhere. Run with
+`uv run site/build.py`, then serve the website and open /fb/:
+    python3 -m http.server 8000 -d ~/my_website
+Nothing goes live until the website is deployed (~/my_website/deploy.sh).
 
 For each league (data/nfl and data/cfb) and each season with a rappa.csv:
 
@@ -18,7 +21,7 @@ For each league (data/nfl and data/cfb) and each season with a rappa.csv:
                reproduces shows rappa.csv alone.
   rating       each team's rating in points, which the page ranks by: net at
                stage 2's points a game for each unit a play, fitted on the
-               games through the week, plus special teams. Before stage 2 has
+               games through the week, plus special teams and penalties. Before stage 2 has
                enough games (2014, the start of 2015) teams rank by net.
   predictions  every week's games since 2015 (history.predictions): win
                probability and the score at RAPPA's line, each week from
@@ -29,7 +32,7 @@ For each league (data/nfl and data/cfb) and each season with a rappa.csv:
                history_ppp.csv, and a rerun recomputes only the weeks not
                yet final, unless older data or the code changed.
 
-Each season goes to site/seasons/<league>/<season>.json, which the page
+Each season goes to seasons/<league>/<season>.json, which the page
 fetches when the season is picked. data.json holds, per league: the
 seasons, the seasons with predictions and the week the Predictions page
 opens on, filters (the conference and division choices), progress
@@ -48,6 +51,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -58,20 +62,21 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
 from cfb import history as cfb_history  # noqa: E402
 from cfb import previous_week as cfb_previous_week  # noqa: E402
-from cfb import special_teams as cfb_special_teams  # noqa: E402
+from cfb import outside as cfb_outside  # noqa: E402
 from cfb import week_parts as cfb_week_parts  # noqa: E402
 from cfb.display import season_pass_level, with_pass_level  # noqa: E402
 from cfb.ratings import FCS  # noqa: E402
 from nfl import history as nfl_history  # noqa: E402
 from nfl import predict_week as nfl_predict_week  # noqa: E402
 from nfl import previous_week as nfl_previous_week  # noqa: E402
-from nfl import special_teams as nfl_special_teams  # noqa: E402
-from rappa import special_teams as shared_special_teams  # noqa: E402
+from nfl import outside as nfl_outside  # noqa: E402
 from rappa import weeks as rappa_weeks  # noqa: E402
 
 DATA = ROOT.parent / "data"
+# The page's data, in the website: ~/sports/cfb_model/site -> ~/my_website/fb/data.
+OUT = Path(os.environ.get("RAPPA_SITE_DATA") or ROOT.parents[2] / "my_website" / "fb" / "data")
 # One file a season, which the page loads when that season is picked.
-SEASONS = ROOT / "seasons"
+SEASONS = OUT / "seasons"
 RATING_COLUMNS = ("rush_off", "pass_off", "qb", "rush_def", "pass_def", "off", "def", "net")
 
 # The college conferences grouped as the power ones: the Pac-12 until it
@@ -86,22 +91,17 @@ def cached(path, sources):
     return path.exists() and all(path.stat().st_mtime >= p.stat().st_mtime for p in sources)
 
 
-def special_teams(season_dir, module, inputs):
-    """A season's special-teams ratings (points a game), refitted when older than its inputs or the code."""
-    cache = season_dir / "special_teams.csv"
-    sources = [season_dir / f for f in inputs] + [Path(module.__file__), Path(shared_special_teams.__file__)]
-    if cached(cache, sources):
-        return pd.read_csv(cache, index_col="team")
-    print(f"rating special teams for {season_dir.parent.name} {season_dir.name}")
-    ratings = module.fit(module.load(int(season_dir.name), season_dir.parent))
-    ratings.round(4).to_csv(cache)
-    return ratings
+def special_teams(season_dir, module):
+    """A season's special teams and penalties (points a game, as predictions add them): module is cfb.outside or
+    nfl.outside, which cache the games they are rated on."""
+    season, out = int(season_dir.name), season_dir.parent
+    return module.fit(module.game_points(season, out), module.prior(season, out)).value
 
 
 def strength(table, slope):
     """Each team's rating in points, what the page ranks by: net at slope points a game for each unit a play, plus
-    special teams, a team with no kicks counting as average. The margin RAPPA expects against an average team on a
-    neutral field, as the predictions add them. Net alone when slope is None."""
+    special teams and penalties, a team with none counting as average. The margin RAPPA expects against an average
+    team on a neutral field, as the predictions add them. Net alone when slope is None."""
     if slope is None:
         return table.net
     return slope * table.net + table.st.fillna(0.0)
@@ -235,7 +235,7 @@ def facts(games):
 
 
 def write_season(league, season, data):
-    """One season's weeks, ratings and predictions, as site/seasons/<league>/<season>.json, which the page loads
+    """One season's weeks, ratings and predictions, as seasons/<league>/<season>.json, which the page loads
     when it is picked."""
     path = SEASONS / league / f"{season}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -257,7 +257,7 @@ def nfl_league():
         # Fewer than a full regular season's games played: still in progress.
         through = int(played.week.max()) if len(played) else 0
         league["progress"][season] = {"partial": len(played) < 256, "through_week": through}
-        st_full = special_teams(path.parent, nfl_special_teams, ["plays.csv"]).value
+        st_full = special_teams(path.parent, nfl_outside)
         weeks = []
         for week, label, table in season_weeks(path, nfl_history, nfl_previous_week, through):
             table = table.drop(columns=["plays_off", "plays_def"], errors="ignore")
@@ -327,7 +327,7 @@ def cfb_league():
         season_games = pd.read_csv(path.parent / "games.csv", low_memory=False)
         league["progress"][season] = cfb_progress(season_games)
         conf = conferences(season_games)
-        st_full = special_teams(path.parent, cfb_special_teams, ["plays.csv", "games.csv"]).value
+        st_full = special_teams(path.parent, cfb_outside)
         full_level = season_pass_level(path.parent)
         weeks, power = [], {}
         for week, label, table in season_weeks(path, cfb_history, cfb_previous_week,
@@ -373,12 +373,13 @@ def main():
         leagues[key] = build()
     if not leagues:
         raise SystemExit(f"no ratings under {DATA}")
-    (ROOT / "data.json").write_text(json.dumps(leagues, allow_nan=False))
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "data.json").write_text(json.dumps(leagues, allow_nan=False))
     for key, league in leagues.items():
         seasons = league["seasons"]
         print(f"{league['name']}: ratings for {seasons[0]}-{seasons[-1]}, predictions for "
               f"{league['game_seasons'][0]}-{league['game_seasons'][-1]}")
-    print(f"wrote {ROOT / 'data.json'} and {SEASONS}")
+    print(f"wrote {OUT / 'data.json'} and {SEASONS}")
 
 
 if __name__ == "__main__":

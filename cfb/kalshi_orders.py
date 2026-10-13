@@ -41,7 +41,7 @@ Guards, each logged as the reason a game was skipped:
     (IMPROVE_SHARE of the volume expected before expiry), joining it
     otherwise; and no order with more than MAX_QUEUE_SHARE of that volume
     still ahead of it, which would fill only if the price fell through it
-  - one order per game, sized at full Kelly on fair value (KELLY_FRACTION,
+  - one order per game, sized at half Kelly on fair value (KELLY_FRACTION,
     MIN_CONTRACT_SHARE) and at most MAX_GAME_SHARE of the bankroll; the run
     capped at MAX_TOTAL_SHARE of the bankroll (fees included) and MAX_ORDERS
     games, and never more than the balance not already committed to resting
@@ -122,11 +122,10 @@ MIN_MATCH = 1.6        # summed name similarity (2 is a perfect match) to pair a
 
 # Sizing. Each order stakes KELLY_FRACTION of the Kelly share of the bankroll, taking fair value as the chance it
 # wins: for a contract costing c (price plus maker fee) that wins with probability q, Kelly stakes (q - c) / (1 - c)
-# of the bankroll. It is full Kelly by choice (2026-10-07; it was half): the most growth if fair value is right, and
-# the biggest swings. Fair value is uncertain (RAPPA's weight next to the market is 0.31 +/- 0.17 on 2025-26), and
-# if the true edge is half the modelled one, full Kelly on it is twice the true Kelly, which grows nothing; half Kelly
-# keeps about three quarters of the growth with far smaller swings. The bankroll is the balance plus what open
-# positions cost.
+# of the bankroll. It is half Kelly (full from 2026-10-07 to 10-13, back to half by choice): fair value is uncertain
+# (RAPPA's weight next to the market is 0.31 +/- 0.17 on 2025-26), and if the true edge is half the modelled one,
+# full Kelly on it is twice the true Kelly, which grows nothing; half Kelly keeps about three quarters of the growth
+# with far smaller swings. The bankroll is the balance plus what open positions cost.
 #   MIN_CONTRACT_SHARE  a Kelly stake of at least this share of one contract buys one (whole contracts only); less
 #                       is skipped. At 0.5, a single contract is at most twice its Kelly stake.
 #   MAX_GAME_SHARE      no more than this share of the bankroll on one game: the biggest bet
@@ -136,7 +135,7 @@ MIN_MATCH = 1.6        # summed name similarity (2 is a perfect match) to pair a
 # The money caps are shares of the bankroll, so sizes scale with it. Until 2026-10-09 they were dollars ($10 an
 # order, $25 a run, 100 contracts), set on a $50 bankroll, where the shares come to the same. --max-contracts,
 # --max-order-cost and --max-total-cost still set fixed caps, off by default.
-KELLY_FRACTION = 1.0
+KELLY_FRACTION = 0.5
 MIN_CONTRACT_SHARE = 0.5
 MAX_GAME_SHARE = 0.20
 MAX_TOTAL_SHARE = 0.50
@@ -890,6 +889,9 @@ def main(argv=None, client=None, now=None, confirm=input):
             print("not confirmed: nothing sent")
             return 1
         return 0 if smoke(client, markets, books, now, args.out, sleep=getattr(client, "sleep", None)) else 1
+    if games.empty:
+        print(f"every game of week {week} has kicked off: nothing to plan")
+        return 0
     if bankroll is None:
         raise SystemExit("no Kalshi key to read the bankroll from: give --bankroll to size the plan against")
     planned = plan(games, matches, books, taken, now, season, week, args.weight, args.min_edge, args.max_contracts,

@@ -124,6 +124,18 @@ def test_no_notification_without_notify_or_with_nothing_to_do(week):
     assert notes == []
 
 
+def test_a_week_played_out_has_nothing_to_plan_and_no_notification(week, capsys):
+    out, mk, books = week
+    client = DepthKalshi(mk, books, read_only=False)
+    notes = []
+    sunday = KICK + timedelta(hours=22)
+    assert daily(out, client, "--notify", now=sunday, notify=notes) == 0
+    assert daily(out, client, "--execute", "--yes", now=sunday, notify=notes) == 0
+    assert client.posts == [] and client.deletes == [] and notes == []
+    assert "every game of week 6 has kicked off" in capsys.readouterr().out
+    assert not (out.parent / "kalshi" / "orders" / "2026_wk06.csv").exists()
+
+
 def test_friday_execute_needs_the_typed_confirmation(week):
     out, mk, books = week
     client = DepthKalshi(mk, books, read_only=False)
@@ -237,13 +249,13 @@ def test_the_budget_goes_to_the_biggest_edge_of_the_week_not_the_first(tmp_path)
         markets_for("KXNCAAFGAME-26OCT10ALAUGA", "Georgia", "Alabama")
     books = dict(zip([m["ticker"] for m in mk], book_pair(0.55) + book_pair(0.55)))
     client = DepthKalshi(mk, books, read_only=False)
-    daily(out, client, "--execute", "--yes", "--max-week-cost", "12")
+    daily(out, client, "--execute", "--yes", "--max-week-cost", "12", "--kelly", "1")
     assert client.posts == []  # Friday's game is in the window, but Saturday night's edge is bigger
     logged = week_log(out).set_index("game_id")
     assert logged.loc[2].decision == "later" and logged.loc[1].reason == "the week's budget is held for bigger edges"
 
     client = DepthKalshi(mk, books, read_only=False)
-    daily(out, client, "--execute", "--yes", "--max-week-cost", "25")
+    daily(out, client, "--execute", "--yes", "--max-week-cost", "25", "--kelly", "1")
     assert [b["ticker"] for _, b in client.posts] == [mk[0]["ticker"]]
 
 

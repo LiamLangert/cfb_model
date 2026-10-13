@@ -73,7 +73,7 @@ def plays_frame(raw, no_play_needs_penalty=False):
         "home": raw.home_team,
         "yards_to_goal": np.where(kick, 100 - raw.yardline_100, raw.yardline_100),
         "play_type": kind, "play_text": raw.desc.fillna(""),
-        "h": pre.h.to_numpy(), "a": pre.a.to_numpy(),
+        "h": pre.h.to_numpy(), "a": pre.a.to_numpy(), "h_after": home.to_numpy(), "a_after": away.to_numpy(),
         "distance": raw.ydstogo if "ydstogo" in raw else np.nan, "row": rows,
     })
     return plays[plays.offense.notna() | plays.play_type.eq("Timeout")].reset_index(drop=True)

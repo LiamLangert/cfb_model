@@ -18,6 +18,7 @@ rappa/              shared by both leagues
   validation.py     scoring ratings on holdout plays, one team-game at a time
   games.py          ratings -> game margins, graded against the spread
   special_teams.py  punt and kickoff ratings: each kick valued by expected points, units rated by ridge
+  outside.py        special teams and penalties: every point outside the play ratings, per game, rated by team
   expected_points.py  expected points by down, distance and yards to goal, fitted on each season; each play's value in them
   weeks.py          running a function over many weeks in parallel processes, one thread each
 cfb/                college football, from CFBD and ESPN
@@ -26,7 +27,8 @@ cfb/                college football, from CFBD and ESPN
   pull_offseason.py recruiting classes, returning production, rosters, defensive player stats and head coaches from the CFBD API
   offseason.py      those turned into shifts of each team's prior
   ratings.py        CFBD play prep, passers from the play text, conferences, college constants, writes rappa.csv and qbs.csv
-  special_teams.py  CFBD punts and kickoffs for rappa.special_teams, added to the predicted margin
+  outside.py        CFBD games for rappa.outside: special teams and penalties, added to the predicted margin
+  special_teams.py  CFBD punts and kickoffs for rappa.special_teams (not in predictions; outside.py counts kicks)
   validate.py       backtests of the rating choices
   predict_games.py  walk-forward predictions across seasons, vs the market
   predict_week.py   one week's predictions, laid out to read
@@ -43,7 +45,8 @@ nfl/                NFL, from nflverse and ESPN
   pull_espn.py      ESPN FPI projections and weekly ratings
   offseason.py      how much of last season's snaps each team's week-1 roster played, as shifts of its prior
   ratings.py        nflverse play prep, NFL constants, writes rappa.csv and qbs.csv
-  special_teams.py  nflverse punts and kickoffs for rappa.special_teams, added to the predicted margin
+  outside.py        nflverse games for rappa.outside: special teams and penalties, added to the predicted margin
+  special_teams.py  nflverse plays in the frame rappa.special_teams and rappa.expected_points read
   validate.py       backtests of the rating choices
   predict_games.py  walk-forward predictions across seasons, vs the market
   key_numbers.py    margins and scores that bunch on 3 and 7: a line set as the market sets one, and a score at it
@@ -54,21 +57,19 @@ nfl/                NFL, from nflverse and ESPN
   backtest_week.py  those predictions graded ATS, week by week
   compare_espn.py   RAPPA and ESPN FPI graded ATS on the same games
   benchmark.py      RAPPA, ESPN FPI and the market: MAE and log-loss by season
-site/               the ratings page for both leagues: team ratings and predictions for any week since 2015
-  build.py          gathers both leagues' weekly ratings and predictions into data.json and seasons/
-  index.html        the page, with a switch between the NFL and college
-  deploy.sh         rebuilds data.json and publishes the page to fb.liamlangert.com
-  weekly.sh         the Tuesday update: pulls, re-rates, then deploy.sh
-  vercel.json       Vercel's settings: a static site, and redirects from the old site's pages
+site/               the data for the ratings page, which lives in the website (~/my_website/fb/)
+  build.py          gathers both leagues' weekly ratings and predictions into ~/my_website/fb/data/
+  weekly.sh         the Tuesday update: pulls, re-rates, then build.py (it publishes nothing)
 data/               not in git
-  cfb/<season>/     plays, games, lines, espn, fpi, teams, recruiting, returning, roster, player_defense, rappa, qbs, predictions_wkNN
+  cfb/<season>/     plays, games, lines, espn, fpi, teams, recruiting, returning, roster, player_defense, rappa, qbs, outside (cache), predictions_wkNN
   cfb/coaches.csv   every FBS head coach's seasons
-  nfl/<season>/     plays, games, snaps, roster_week1, espn, fpi, rappa, qbs
+  nfl/<season>/     plays, games, snaps, roster_week1, espn, fpi, rappa, qbs, outside (cache)
 ```
 
 Both leagues run the same pipeline: quarterbacks rated on their own, special
-teams added at face value, and a points conversion trained on every earlier
-game. Both keep every play, garbage time included, and clip each one's value
+teams and penalties added to the margin - every point outside the play
+ratings, rated game by game (`rappa/outside.py`), at 0.7 - and a points
+conversion trained on every earlier game. Both keep every play, garbage time included, and clip each one's value
 to +/-3 points. Each league's other constants (home field, how much of last
 season carries over, the quarterback replacement level) are set in its
 `ratings.py`, with how each was measured. College also gives every conference
@@ -167,20 +168,22 @@ for the points conversion and 2015's prior. It writes `data/nfl/benchmark.csv`.
 ## Site
 
 ```
-uv run site/build.py && python3 -m http.server 8000 -d site
+uv run site/build.py && python3 -m http.server 8000 -d ~/my_website   # then open localhost:8000/fb/
 ```
 
-One page for both leagues, with a switch between them, a theme switch, and
+The page itself is part of the website, ~/my_website/fb/index.html, styled
+with the site's shared look (~/my_website/shared/). This repo only makes its
+data. One page for both leagues, with a switch between them, a theme switch, and
 a "How does it work?" page (#how) that explains the model for a general
 reader. Both lists browse any week of any season, and every week shows
 only what was known then.
 
 Teams lists every team's ratings through the week picked, with its special
-teams in points a game. The build rates each season week by week
+teams and penalties in points a game. The build rates each season week by week
 (`<league>.history.ratings_by_week`): the fit that reproduces the season's
 rappa.csv (with or without last season's prior, as `<league>.previous_week`
 checks), on the plays up to each week, with special teams on the same
-games' kicks. The last week's is rappa.csv. It keeps the result in
+games. The last week's is rappa.csv. It keeps the result in
 rappa_weekly.csv next to rappa.csv until the season's plays, rappa.csv or
 the code change; a season that no fit reproduces shows rappa.csv alone. Run
 it after re-rating a season.
@@ -190,7 +193,7 @@ average team on a neutral field, added up as the predictions add it. That is
 net at stage 2's points a game for each unit a play, fitted on the games
 through the week (about 57 in college, at the week's average plays, and 62
 in the NFL), plus special
-teams. Before stage 2 has enough games (2014 and the start of 2015) teams
+teams and penalties. Before stage 2 has enough games (2014 and the start of 2015) teams
 rank by net. Move is each team's change in that rank since the week before.
 
 Predictions lists any week's games since 2015 (college's FBS-vs-FBS ones),
@@ -210,44 +213,41 @@ to move a league on a week.
 
 The build writes data.json (the leagues, their seasons and filters) and
 seasons/<league>/<season>.json, one file a season, which the page fetches
-when the season is picked.
+when the season is picked, into ~/my_website/fb/data/
+(`RAPPA_SITE_DATA=<folder>` writes them elsewhere). The website keeps them
+out of git, but deploys them.
 
 ### Publishing
 
 ```
-site/deploy.sh
+~/my_website/deploy.sh
 ```
 
-The page is published at https://fb.liamlangert.com (and
-https://liams-rankings.vercel.app), the Vercel project liams-rankings, which
-site/ is linked to (site/.vercel). fb is a CNAME in liamlangert.com's
-Cloudflare DNS, set to DNS only, as Vercel needs. The script
-rebuilds data.json and the season files and runs `vercel deploy --prod`. It needs the Vercel CLI
-(`npm install -g vercel`) and a one-time `vercel login`. Only index.html,
-data.json and seasons/ are uploaded (site/.vercelignore). vercel.json tells Vercel to
-serve the folder as it is, with no build, and redirects the old Next.js
-site's pages: /cfb and /cfb/games to College's Teams and Predictions, and
-/cbb to the home page. Every earlier deployment stays in the Vercel
-dashboard, and `vercel rollback <deployment url>` puts one back.
+The page is published with the rest of the website, the Vercel project
+liamlangert: at https://liamlangert.com/fb/ and https://fb.liamlangert.com,
+which the website's vercel.json routes to the page, along with the old
+site's redirects (/cfb and /cfb/games to College's Teams and Predictions,
+/cbb to the home page). fb is a CNAME in liamlangert.com's Cloudflare DNS,
+set to DNS only, as Vercel needs. Nothing here deploys: a rebuilt week goes
+live the next time the website is deployed. Every earlier deployment stays
+in the Vercel dashboard, and `vercel rollback <deployment url>` puts one
+back.
 
 ### Every Tuesday
 
 ```
-site/weekly.sh               # pull, re-rate, rebuild and publish
-site/weekly.sh --no-deploy   # the same, without publishing
+site/weekly.sh               # pull, re-rate and rebuild the page's data
 ```
 
 `site/weekly.sh` is the whole week's update: both leagues' pulls (`--force`,
 for a season in progress), the season re-rated (college on last season's
-prior, the NFL standalone, as the repo's seasons are), then `site/deploy.sh`.
-A league whose pull or re-rating fails is left as it was and the other still
-publishes; the script then exits 1. From March through August it does
+prior, the NFL standalone, as the repo's seasons are), then `site/build.py`.
+It does not publish; deploy the website to put the new week live.
+A league whose pull or re-rating fails is left as it was and the other is
+still rebuilt; the script then exits 1. From March through August it does
 nothing. Each run's output goes to data/logs/weekly-<date>.log.
 
 Windows Task Scheduler runs it every Tuesday at 10am, as the task "RAPPA
 weekly update". A run missed while the laptop was off happens when it is
 next on. It needs the Windows user to be logged in, and it can wake the
-laptop from sleep. `vercel login`'s session refreshes itself while it is
-used. For a token that does not depend on that, make one under Vercel's
-Account Settings > Tokens and add it to .env as `VERCEL_TOKEN=...`; the
-script passes it to the Vercel CLI.
+laptop from sleep. It needs no Vercel login, as it publishes nothing.

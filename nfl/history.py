@@ -6,7 +6,8 @@ The NFL counterpart of cfb.history, for site/build.py:
                    that reproduces the season's rappa.csv (nfl.previous_week's
                    check; the repo's NFL seasons are rated without a prior), on
                    the plays up to and including the week, with special teams
-                   on the same weeks' kicks. The last week's is rappa.csv itself.
+                   and penalties (nfl.outside) on the same weeks' games. The last
+                   week's is rappa.csv itself.
   predictions      every game nfl.predict_week's walk predicts, each week from
                    ratings on the weeks before it: win probability and the score
                    at RAPPA's line, projected as nfl.predict_week.week_slate
@@ -26,7 +27,7 @@ from pathlib import Path
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from nfl import key_numbers, pace, special_teams
+from nfl import key_numbers, outside, pace
 from nfl.predict_games import REST_WEIGHT, load_games
 from nfl.previous_week import fit_plays, priors, same
 from nfl.ratings import in_fit, load
@@ -51,8 +52,9 @@ def week_labels(season, out):
 def ratings_by_week(season, out=Path("data/nfl")):
     """[(week, label, ratings)], a week at a time, or None when no fit reproduces the season's rappa.csv.
 
-    ratings are as rappa.csv holds them, plus st (points a game) on the
-    kicks through the week.
+    ratings are as rappa.csv holds them, plus st (special teams and
+    penalties, nfl.outside's value in points a game) on the games through the
+    week.
     """
     plays = in_fit(load(season, out))
     saved = pd.read_csv(out / str(season) / "rappa.csv", index_col="team")
@@ -60,11 +62,11 @@ def ratings_by_week(season, out=Path("data/nfl")):
     for prior in priors(season, out):
         if not same(fit_plays(plays, *prior), saved):
             continue
-        kicks = special_teams.load(season, out)
+        units, units_prior = outside.game_points(season, out), outside.prior(season, out)
         weeks = []
         for week in sorted(plays.week.unique()):
             ratings = fit_plays(plays[plays.week <= week], *prior)
-            ratings["st"] = special_teams.fit(kicks[kicks.week <= week]).value
+            ratings["st"] = outside.fit(units[units.week <= week], units_prior).value
             weeks.append((int(week), labels.get(int(week), f"Week {int(week)}"), ratings))
         return weeks
     log.warning("%d: no fit of plays.csv reproduces rappa.csv - re-rate it to browse its weeks", season)
@@ -72,9 +74,9 @@ def ratings_by_week(season, out=Path("data/nfl")):
 
 
 def stage2(rows, train):
-    """Stage 2 as nfl.predict_week.week_slate fits it, special teams and rest taken off the margin first: the model,
-    and each row's points at face value."""
-    face = rows.st_edge * special_teams.WEIGHT + REST_WEIGHT * rows.rest_edge
+    """Stage 2 as nfl.predict_week.week_slate fits it, special teams and penalties and rest taken off the margin
+    first: the model, and each row's points put on as they are."""
+    face = rows.st_edge + REST_WEIGHT * rows.rest_edge
     return LinearRegression().fit(train[FEATURES], train.margin - face[train.index]), face
 
 

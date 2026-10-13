@@ -19,7 +19,7 @@ it:
     quarterback    the starter's rating, on his dropbacks and designed runs
     rush defence   rush_def and pass_def at the same shares, times the
     pass defence   coefficient on the other side's edge
-    special teams  the punt and kickoff gap, at face value (special_teams.WEIGHT)
+    special teams  special teams and penalties: nfl.outside's gap, at rappa.outside.WEIGHT
     rest           the rest gap, at nfl.predict_games.REST_WEIGHT points a day
 
 Every team part is that team's unit against an average one, in points for
@@ -75,7 +75,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from nfl import key_numbers, offseason, pace, special_teams
+from nfl import key_numbers, offseason, outside, pace
 from nfl.benchmark import market_wp, win_probability
 from nfl.predict_games import ALPHA, REST_CLIP, REST_WEIGHT, load_games, season_features, walk_forward_predict
 from nfl.ratings import QB_REPLACEMENT, centered, fit_qbs, in_fit, load, qb_prior_means, with_qb_runs
@@ -109,22 +109,24 @@ def sources(season, out, since=FIRST_SEASON):
     files += [out / str(s) / f for s in range(since - 1, season) for f in PRIOR_INPUTS]
     code = Path(__file__).resolve().parent
     files += [code / f for f in
-              ("predict_week.py", "predict_games.py", "ratings.py", "special_teams.py", "benchmark.py",
-               "key_numbers.py", "pace.py", "offseason.py")]
-    files += [code.parent / "rappa" / f for f in ("model.py", "games.py", "special_teams.py", "expected_points.py")]
+              ("predict_week.py", "predict_games.py", "ratings.py", "special_teams.py", "outside.py",
+               "benchmark.py", "key_numbers.py", "pace.py", "offseason.py")]
+    files += [code.parent / "rappa" / f for f in ("model.py", "games.py", "special_teams.py", "expected_points.py",
+                                                   "outside.py")]
     return [p for p in files if p.exists()]
 
 
-def week_ratings(season, week, out, alpha, prior_weight, plays=None, kicks=None):
+def week_ratings(season, week, out, alpha, prior_weight, plays=None, units=None):
     """The team, quarterback and special-teams ratings nfl.predict_games rates the week on.
 
     season_features fits these and keeps only the two edges; this repeats its
     fit for the one week so the edges can be taken apart. plays (in_fit's)
-    and kicks (special_teams.load's) are the season's, read here unless given.
+    and units (nfl.outside.game_points') are the season's, read here unless given.
     Returns the
     centred team ratings, each quarterback's rating against the average
     dropback, his dropbacks so far, the ids rated from last season, the
-    rush share, the designed-run share and each team's special-teams value.
+    rush share, the designed-run share and each team's special teams and
+    penalties (nfl.outside's value, points a game).
     """
     plays = in_fit(load(season, out)) if plays is None else plays
     before = with_qb_runs(plays[plays.week < week])
@@ -145,8 +147,8 @@ def week_ratings(season, week, out, alpha, prior_weight, plays=None, kicks=None)
         qbs = pd.concat([qbs, start_at[carried]])
     level = before.passer[before.play_kind == "pass"].dropna().map(qbs).mean()
     dropbacks = before.passer[before.play_kind == "pass"].value_counts()
-    kicks = special_teams.load(season, out) if kicks is None else kicks
-    st = special_teams.fit(kicks[kicks.week < week]).value
+    units = outside.game_points(season, out) if units is None else units
+    st = outside.fit(units[units.week < week], outside.prior(season, out)).value
     return (centered(ratings), qbs - level, QB_REPLACEMENT - level, dropbacks, carried,
             float((before.play_kind == "rush").mean()), float(before.qb_runner.notna().mean()), st)
 
@@ -187,10 +189,10 @@ def take_apart(slate, model, ratings, qb, rush_share, run_share, st):
         parts[f"{side}_rush_def_pts"] = -their_b * rush_share * r.rush_def.to_numpy()
         parts[f"{side}_pass_def_pts"] = defence - parts[f"{side}_rush_def_pts"]
     home_st, away_st = (slate[f"{side}_team"].map(st).to_numpy() for side in ("home", "away"))
-    # As nfl.predict_games: a team with no kicks yet makes the gap zero.
+    # As nfl.predict_games: values are points already, and a team never rated makes the gap zero.
     missing = np.isnan(home_st) | np.isnan(away_st)
-    parts["home_special_teams_pts"] = np.where(missing, 0.0, special_teams.WEIGHT * home_st)
-    parts["away_special_teams_pts"] = np.where(missing, 0.0, special_teams.WEIGHT * away_st)
+    parts["home_special_teams_pts"] = np.where(missing, 0.0, home_st)
+    parts["away_special_teams_pts"] = np.where(missing, 0.0, away_st)
     rest = REST_WEIGHT * slate.rest_edge.to_numpy()
     parts["home_rest_pts"], parts["away_rest_pts"] = np.maximum(rest, 0.0), np.maximum(-rest, 0.0)
     parts["home_home_field_pts"] = model.intercept_ + b_neutral * slate.neutral_site.to_numpy()
@@ -220,15 +222,15 @@ def predict(season, week=None, out=Path("data/nfl"), since=FIRST_SEASON, alpha=A
     return week_slate(rows, preds, season, week, out, alpha, prior_weight)
 
 
-def week_slate(rows, preds, season, week, out, alpha=ALPHA, prior_weight=None, plays=None, kicks=None):
-    """One week of predict, from walk's rows and predictions; plays and kicks as week_ratings takes them."""
+def week_slate(rows, preds, season, week, out, alpha=ALPHA, prior_weight=None, plays=None, units=None):
+    """One week of predict, from walk's rows and predictions; plays and units as week_ratings takes them."""
     slate = preds[(preds.season == season) & (preds.week == week)].copy()
     if slate.empty:
         raise SystemExit(f"no predictions for {season} week {week}: it needs plays from the week before "
                          f"(`uv run nfl/pull.py {season}`), and week 1 has none")
 
     # Stage 2 again, for its coefficients: fitted on the same games as walk_forward_predict.
-    face = rows.st_edge * special_teams.WEIGHT + REST_WEIGHT * rows.rest_edge
+    face = rows.st_edge + REST_WEIGHT * rows.rest_edge
     train = rows[rows.margin.notna() & (rows.season * 100 + rows.week < season * 100 + week)]
     face_train = face[train.index]
     model = LinearRegression().fit(train[FEATURES], train.margin - face_train)
@@ -252,7 +254,7 @@ def week_slate(rows, preds, season, week, out, alpha=ALPHA, prior_weight=None, p
         scores, slate.home_points, slate.away_points, slate.rappa_line)
 
     ratings, qbs, replacement, dropbacks, carried, rush_share, run_share, st = week_ratings(
-        season, week, out, alpha, prior_weight, plays, kicks)
+        season, week, out, alpha, prior_weight, plays, units)
     qb = {side: slate[f"{side}_qb"].map(qbs).fillna(replacement).to_numpy() for side in ("home", "away")}
     parts = take_apart(slate, model, ratings, qb, rush_share, run_share, st)
     total = sum(parts[f"home_{p}_pts"] - parts[f"away_{p}_pts"] for p in PARTS)
