@@ -38,7 +38,7 @@ before sending anything. Later games are listed at today's prices with the
 week's budget held for them: run it again on a later day to place those.
 It builds the week's predictions first if they are missing or older than
 the latest pull. Extra arguments go to `betting.daily` (`--bankroll 50`,
-`--max-week-share`, ...; `uv run --with cryptography -m betting.daily --help`
+`--max-week-share`, ...; `uv run -m betting.daily --help`
 lists them). Each run's output goes to data/logs/bets-<date>.log. Nothing
 runs on a schedule.
 
@@ -81,11 +81,11 @@ nfl/                NFL, from nflverse and ESPN
   predict_week.py   one week's predictions taken apart: win probability, line, projected score, and the points from each factor
   previous_week.py  the season rated without its latest week; which prior reproduces rappa.csv
   history.py        the site's weeks: ratings through each week, and every week's predictions
-betting/            Kalshi, college games only
-  kalshi.py         the API client: signed requests, read-only unless asked, fees, order books, team names
-  orders.py         fair value, guards and Kelly sizing; placing, cancelling, and --track
-  daily.py          the week's plan, placed 2-30 hours before each kickoff, and the review of resting orders
-  display.py        the terminal tables
+betting/            Kalshi, college games only, on the shared ../kalshi package (also cbb_model's)
+  orders.py         the League, WEIGHT, the week's games, matching Kalshi's names; plan, place, cancel, --track
+  daily.py          the week's plan, placed 2-30 hours before each kickoff, to a week's budget
+  names.py          Kalshi's team names made comparable with CFBD's
+  display.py        the shared tables, with RAPPA and kickoffs
 research/           backtests and benchmarks; nothing above runs them
   cfb_validate.py, nfl_validate.py          the rating choices, scored on holdout plays (validation.py)
   cfb_benchmark.py, nfl_benchmark.py        RAPPA, ESPN FPI and the market: MAE and log-loss by season
@@ -94,7 +94,7 @@ research/           backtests and benchmarks; nothing above runs them
   cfb_predict_week.py                       one week's college predictions, laid out to read
   cfb_special_teams.py                      CFBD punts and kickoffs for rappa.special_teams (not in predictions)
 site/build.py       gathers both leagues' weekly ratings and predictions into ~/my_website/fb/data/
-tests/              the Kalshi code's tests, with fake transports
+tests/              the Kalshi code's tests, with fake transports (`uv run pytest`)
 data/               not in git
   cfb/<season>/     plays, games, lines, espn, fpi, teams, recruiting, returning, roster, player_defense, rappa, qbs, outside (cache), parts_wkNN
   cfb/coaches.csv   every FBS head coach's seasons
@@ -146,9 +146,11 @@ echo "CFBD_API_KEY=..." > .env    # for cfb.pull
 # and KALSHI_ID, KALSHI_PRIVATE_KEY in .env for bets.sh
 ```
 
-The Kalshi code needs `cryptography`, which is not in the project's
-dependencies: run it with `uv run --with cryptography`, as bets.sh does. Its
-tests: `PYTHONPATH=. uv run --with cryptography --with pytest pytest tests/`.
+The Kalshi code is mostly the shared package in `../kalshi` (the API client,
+pricing, sizing, the plan, placing, cancelling and tracking, the daily review
+and the tables), an editable path dependency that `uv sync` installs; cbb_model
+uses the same one. `betting/` holds only what is football's. Tests: `uv run
+pytest` here, and in `../kalshi` after changing it (and in `../cbb_model`).
 
 ## Rating seasons from scratch, and the research
 

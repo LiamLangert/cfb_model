@@ -27,9 +27,9 @@ mkdir -p data/logs
 exec > >(tee -a "data/logs/bets-$(date +%F).log") 2>&1
 
 echo "=== $(date '+%F %T') orders so far"
-uv run --quiet --with cryptography -m betting.orders --track
+uv run --quiet -m betting.orders --track
 echo "=== $(date '+%F %T') this week's plan"
-uv run --quiet --with cryptography -m betting.daily --execute "$@"
+uv run --quiet -m betting.daily --execute "$@"
 status=$?
 echo "=== $(date '+%F %T') done"
 exit $status

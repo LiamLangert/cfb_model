@@ -1,9 +1,11 @@
-"""Kalshi: college football maker orders priced off RAPPA. ./bets.sh runs it.
+"""Kalshi: college football maker orders priced off RAPPA, on the shared ../kalshi package. ./bets.sh runs it.
 
-    kalshi      the API client: signed requests, read-only unless asked, fees, order books, team names
-    orders      fair value, guards and Kelly sizing; placing, cancelling, and --track (what became of every order)
-    daily       the week's plan, placed 2-30 hours before each kickoff, and the review of resting orders
-    display     the terminal tables
+    orders      the League, WEIGHT, the week's games, matching Kalshi's names to them; the planner's command
+                line (plan, place, cancel, --track, --smoke)
+    daily       the run ./bets.sh uses: the week's plan, placed 2-30 hours before each kickoff, to a week's
+                budget, and the review of resting orders
+    names       Kalshi's team names made comparable with CFBD's
+    display     kalshi.display's tables, with RAPPA and kickoffs
 
-Each runs as `uv run --with cryptography -m betting.<module>`, with --help.
+Each runs as `uv run -m betting.<module>`, with --help.
 """

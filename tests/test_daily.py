@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from betting import daily as kd
 from betting import orders as ko
-from betting.kalshi import Book, Client, KalshiError, maker_fee
+from kalshi.client import Book, Client, KalshiError, maker_fee
 from test_orders import NOW as TUESDAY, FakeKalshi, book_pair, game, markets_for
 
 FRIDAY = datetime(2026, 10, 9, 20, 0, tzinfo=timezone.utc)  # 4pm ET; the fixture's games are Saturday 3:30pm ET

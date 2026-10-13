@@ -10,7 +10,7 @@ So it only places on games kicking off between MIN_LEAD (2h) and MAX_LEAD
 Friday's run takes Friday's games and Saturday's up to 10pm; Saturday's takes
 the rest.
 
-Each run, with betting.orders' pricing, guards and sizing:
+Each run, with betting.orders' pricing, guards and sizing (kalshi.maker's), and kalshi.review's review:
 
   1. Reviews every resting order this module or betting.orders placed on
      the week's games, against the book without the order itself in it:
@@ -58,36 +58,30 @@ Logs, in data/kalshi/orders/: the plan and execute rows go to the week's
 lead_hours, the hours from the run to kickoff), so --track follows the
 orders placed here; reviews.csv has every review; cancels.csv every cancel.
 
-    uv run --with cryptography -m betting.daily              # plan only
-    uv run --with cryptography -m betting.daily --execute    # place, after confirming
-    ./bets.sh                                                # --track, then --execute, logged
+    uv run -m betting.daily              # plan only
+    uv run -m betting.daily --execute    # place, after confirming
+    ./bets.sh                            # --track, then --execute, logged
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import logging
-import math
-import subprocess
 import sys
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 
-from betting import display, kalshi
+from betting import display
 from betting import orders as ko
-from betting.kalshi import Client, KalshiError, maker_fee, parse_book, ticker_date
+from kalshi import review as shared
+from kalshi.client import DEMO, PROD, Client, ticker_date
+from kalshi.review import KEEP_EDGE, MAX_LEAD, book_without, event_of, own_bids, toast  # noqa: F401
 
 log = logging.getLogger(__name__)
 
 MIN_LEAD = ko.MIN_LEAD
-MAX_LEAD = timedelta(hours=30)
-# A resting order is kept while its edge clears KEEP_EDGE, below the MIN_EDGE it was placed at, so a
-# half-cent wiggle in the mid does not cancel it and cost its place in the queue.
-KEEP_EDGE = 0.01
 # The week's budget, in place of betting.orders' per-run MAX_TOTAL_SHARE and MAX_ORDERS: the same caps, for a
 # week of daily runs instead of one Tuesday run. The money is a share of the bankroll, so it grows with it.
 MAX_WEEK_SHARE = ko.MAX_TOTAL_SHARE
@@ -96,147 +90,17 @@ MAX_WEEK_ORDERS = ko.MAX_ORDERS
 REASONS = {"run's total cost cap reached": "the week's budget is held for bigger edges",
            "order count cap reached": "the week's order cap is held for bigger edges"}
 
-# Windows' PowerShell, which can show a notification from a WSL process; its app id is the one toasts show under.
-POWERSHELL = "powershell.exe"
-TOAST_APP = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
-
-
-# ---------- the books, without our own orders ----------
-
-def book_without(payload, own=None):
-    """A Book from an orderbook payload with our resting bids ({price: contracts}) taken out of it."""
-    if not own:
-        return parse_book(payload)
-    book = dict((payload or {}).get("orderbook_fp") or {})
-    yes = []
-    for p, n in book.get("yes_dollars") or []:
-        left = float(n) - sum(c for q, c in own.items() if abs(q - float(p)) < 1e-6)
-        if left > 1e-9:
-            yes.append([p, str(left)])
-    book["yes_dollars"] = yes
-    return parse_book({"orderbook_fp": book})
-
-
-def own_bids(resting):
-    """{ticker: {price: contracts}} of resting YES bids."""
-    out = {}
-    for o in resting:
-        if o.get("book_side", "bid") != "bid":
-            continue
-        price = round(float(o.get("yes_price_dollars") or 0), 4)
-        levels = out.setdefault(o["ticker"], {})
-        levels[price] = levels.get(price, 0.0) + float(o.get("remaining_count_fp") or 0)
-    return out
-
-
-def event_of(ticker):
-    return ticker.rsplit("-", 1)[0]
-
-
-def guard(g, hb, ab):
-    """Why the game's books cannot be priced off, as betting.orders.plan's guards say it, or None."""
-    if hb is None or ab is None or hb.mid is None or ab.mid is None:
-        return "a book is empty"
-    if max(hb.width, ab.width) > ko.MAX_WIDTH + 1e-9:
-        return f"book too wide ({max(hb.width, ab.width):.2f})"
-    if abs(hb.mid + ab.mid - 1) > ko.MAX_BOOK_GAP + 1e-9:
-        return "the two books disagree"
-    market_home = (hb.mid + 1 - ab.mid) / 2
-    if abs(g["rappa_wp"] - market_home) > ko.MAX_DISAGREE + 1e-9:
-        return f"RAPPA too far from the market ({g['rappa_wp'] - market_home:+.2f}), likely news"
-    return None
-
 
 # ---------- 1. the review ----------
 
-def replacement_id(order, season, week, run):
-    """A new client_order_id for the order replacing `order`: Kalshi refuses any id it has seen (see
-    betting.orders.NAMESPACE), so it names the order replaced as well as the run."""
-    return str(uuid.uuid5(ko.NAMESPACE, f"rappa-cfb:{order['ticker']}:{season}:{week}:{run.isoformat()}:"
-                                        f"replaces:{order['order_id']}"))
-
-
-def review(resting, games, matches, payloads, now, season, week, bankroll, weight=ko.WEIGHT, min_edge=ko.MIN_EDGE,
+def review(resting, games, matches, payloads, now, season, week, bankroll, weight=None, min_edge=ko.MIN_EDGE,
            keep_edge=KEEP_EDGE, kelly=ko.KELLY_FRACTION, max_game_share=ko.MAX_GAME_SHARE,
            max_contracts=None, max_order_cost=None):
-    """keep, cancel or replace each of our resting orders on a matched game. Pure: nothing is sent.
-
-    resting is our resting orders (Kalshi's order dicts), games the parts slate, matches match_events',
-    payloads each matched ticker's orderbook response. Returns (reviews, replacements): one review row per
-    order, and the plan rows (betting.orders' columns) of the orders that replace those being replaced.
-    """
-    by_event = {hit["event"]: (gid, hit) for gid, hit in matches.items()}
-    slate = {g["game_id"]: g for g in games.to_dict("records")}
-    own = own_bids(resting)
-    rows, replacements = [], []
-    for o in resting:
-        found = by_event.get(event_of(o["ticker"]))
-        if found is None or found[0] not in slate:
-            continue  # not one of this week's games, or its market has closed: it expires on its own
-        gid, hit = found
-        g = slate[gid]
-        side = "home" if o["ticker"] == hit["home"]["ticker"] else "away"
-        market = hit[side]
-        price = round(float(o.get("yes_price_dollars") or 0), 4)
-        left = float(o.get("remaining_count_fp") or 0)
-        hb = book_without(payloads.get(hit["home"]["ticker"]), own.get(hit["home"]["ticker"]))
-        ab = book_without(payloads.get(hit["away"]["ticker"]), own.get(hit["away"]["ticker"]))
-        book = hb if side == "home" else ab
-        kick = ko.kickoff_utc(g)
-        row = {"order_id": o["order_id"], "client_order_id": o.get("client_order_id"), "game_id": gid,
-               "game": f"{g['away_team']} at {g['home_team']}", "side": side, "team": market["yes_sub_title"],
-               "ticker": o["ticker"],
-               "kickoff": kick.isoformat() if kick else None, "price": price, "remaining": left,
-               "rappa_home": g["rappa_wp"], "bid": book.bid, "ask": book.ask, "bid_size": book.bid_size}
-        rows.append(row)
-        why = guard(g, hb, ab)
-        if why:
-            row.update(decision="cancel", reason=f"can't price it now: {why}")
-            continue
-        p = g["rappa_wp"] if side == "home" else 1 - g["rappa_wp"]
-        fair = ko.fair_value(book.mid, p, weight)
-        edge = fair - price - maker_fee(price)
-        row.update(mid=round(book.mid, 4), fair=round(fair, 4), edge=round(edge, 4))
-        if edge < keep_edge - 1e-9:
-            row.update(decision="cancel", reason=f"edge gone ({100 * edge:+.1f}c a contract)")
-            continue
-        if book.bid is None or price >= book.bid - 1e-9:
-            row.update(decision="keep", reason="")
-            continue
-        # Outbid: re-price as plan would, for no more than the order had left.
-        why = None
-        if kick is None or kick - now < MIN_LEAD:
-            why = "too close to kickoff to re-place"
-        else:
-            hours = (kick - ko.EXPIRE_BEFORE - now).total_seconds() / 3600
-            flow = ko.expected_volume(market, hours)
-            new = ko.best_price(fair, book, min_edge, improve=flow is None or book.bid_size > ko.IMPROVE_SHARE * flow)
-            ahead = 0.0 if new is None or new > book.bid + 1e-9 else book.bid_size
-            per = None if new is None else new + maker_fee(new)
-            n = 0 if new is None else min(math.floor(left + 1e-9), ko.contracts(
-                fair, per, bankroll, kelly, max_game_share, max_contracts, max_order_cost)[0])
-            if new is None or not ko.MIN_PRICE <= new <= ko.MAX_PRICE:
-                why = "no price above the bid clears the edge"
-            elif flow is not None and ahead > ko.MAX_QUEUE_SHARE * flow:
-                why = f"queue too deep ({ahead:,.0f} ahead, ~{flow:,.0f} expected to trade)"
-            elif n < 1:
-                why = "Kelly now sizes it under one contract"
-        if why:
-            row.update(decision="cancel", reason=f"outbid at {book.bid:.2f}; {why}")
-            continue
-        row.update(decision="replace", reason=f"outbid at {book.bid:.2f}", new_price=new, new_count=n)
-        replacements.append({
-            "game_id": gid, "game": row["game"], "rappa_home": g["rappa_wp"], "decision": "order", "event": hit["event"],
-            "kickoff": kick.isoformat(), "mid_home": round(hb.mid, 4), "side": side, "team": market["yes_sub_title"],
-            "ticker": o["ticker"], "fair": round(fair, 4), "bid": book.bid, "ask": book.ask, "bid_size": book.bid_size,
-            "ask_size": book.ask_size, "price": new, "edge": round(fair - per, 4), "count": n, "cost": round(n * per, 4),
-            "queue_ahead": ahead, "expected_volume": None if flow is None else round(flow, 1),
-            "volume_24h": ko._num(market.get("volume_24h_fp")), "improved": new > book.bid + 1e-9,
-            "kelly_share": round(ko.kelly_share(fair, per), 4), "bankroll": round(bankroll, 2),
-            "expires": (kick - ko.EXPIRE_BEFORE).isoformat(),
-            "client_order_id": replacement_id(o, season, week, now), "replaces": o["order_id"],
-            "reason": ""})
-    return pd.DataFrame(rows), pd.DataFrame(replacements)
+    """kalshi.review.review on the week's parts slate: keep, cancel or replace each of our resting orders."""
+    return shared.review(resting, ko.slate(games, week), matches, payloads, now, season, bankroll, league=ko.LEAGUE,
+                         weight=ko.WEIGHT if weight is None else weight, min_edge=min_edge, keep_edge=keep_edge,
+                         kelly=kelly, max_game_share=max_game_share, max_contracts=max_contracts,
+                         max_order_cost=max_order_cost)
 
 
 # ---------- 2. the week's budget and plan ----------
@@ -263,37 +127,11 @@ def fill_cost(f):
 
 def committed(o):
     """What a resting order holds back: its contracts left at its price and the maker fee."""
-    yes = float(o.get("yes_price_dollars") or 0)
-    price = yes if o.get("book_side", "bid") == "bid" else 1 - yes
-    return float(o.get("remaining_count_fp") or 0) * (price + maker_fee(price))
+    return shared.committed(o, ko.LEAGUE.fee_type)
 
 
 def holdings(resting, positions):
-    """What each game already holds, for plan's top-ups: ({event: {"ticker", "contracts", "cost"}}, odd), the
-    first for games held on one team's YES only (positions and resting bids together), odd the events held any
-    other way (both teams, NO contracts, a resting sell), which are left alone."""
-    held, odd = {}, set()
-
-    def add(ticker, n, cost):
-        e = event_of(ticker)
-        h = held.setdefault(e, {"ticker": ticker, "contracts": 0.0, "cost": 0.0})
-        if h["ticker"] != ticker:
-            odd.add(e)
-        h["contracts"] += n
-        h["cost"] += cost
-
-    for p in positions:
-        n = float(p.get("position_fp") or 0)
-        if n < 0:
-            odd.add(event_of(p["ticker"]))
-        elif n > 0:
-            add(p["ticker"], n, abs(float(p.get("market_exposure_dollars") or 0)))
-    for o in resting:
-        if o.get("book_side", "bid") != "bid":
-            odd.add(event_of(o["ticker"]))
-        else:
-            add(o["ticker"], float(o.get("remaining_count_fp") or 0), committed(o))
-    return {e: h for e, h in held.items() if e not in odd}, odd
+    return shared.holdings(resting, positions, ko.LEAGUE.fee_type)
 
 
 def week_spent(fills, resting, first, last):
@@ -312,66 +150,11 @@ def week_spent(fills, resting, first, last):
 
 def split(planned, now, max_lead=MAX_LEAD):
     """Orders kicking off beyond max_lead become 'later': budgeted for, placed in a later run."""
-    planned = planned.copy()
-    if "kickoff" not in planned:
-        planned["kickoff"] = None
-    kick = pd.to_datetime(planned.kickoff, utc=True, errors="coerce")
-    planned["lead_hours"] = ((kick - now).dt.total_seconds() / 3600).round(1)
-    later = planned.decision.eq("order") & (kick - now > max_lead)
-    planned.loc[later, "decision"] = "later"
-    planned.loc[later, "reason"] = [f"kicks off in {h:.0f}h: placed {max_lead.total_seconds() / 3600:.0f}h out or less"
-                                    for h in planned.loc[later, "lead_hours"]]
-    planned["reason"] = planned.reason.replace(REASONS)
-    return planned
-
-
-# ---------- the notification ----------
-
-def _ps_string(text):
-    return "'" + str(text).replace("'", "''") + "'"
-
-
-def toast(title, body, run=subprocess.run):
-    """A Windows notification, through PowerShell from WSL. Logs and carries on when there is none to show."""
-    script = "\n".join([
-        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null",
-        "$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
-        "[Windows.UI.Notifications.ToastTemplateType]::ToastText02)",
-        "$t = $xml.GetElementsByTagName('text')",
-        f"$t.Item(0).AppendChild($xml.CreateTextNode({_ps_string(title)})) > $null",
-        f"$t.Item(1).AppendChild($xml.CreateTextNode({_ps_string(body)})) > $null",
-        "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
-        f"{_ps_string(TOAST_APP)}).Show([Windows.UI.Notifications.ToastNotification]::new($xml))",
-    ])
-    encoded = base64.b64encode(script.encode("utf-16-le")).decode()
-    try:
-        done = run([POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-                   capture_output=True, timeout=60)
-        if done.returncode:
-            log.warning("notification failed: %s", (done.stderr or b"")[:300])
-    except (OSError, subprocess.TimeoutExpired) as e:
-        log.warning("no notification: %s", e)
+    return shared.split(planned, now, max_lead, league=ko.LEAGUE, reasons=REASONS)
 
 
 def summary(reviews, now_orders):
-    """The notification's title and body, or None when there is nothing to do."""
-    acts = reviews[reviews.decision.isin(["cancel", "replace"])] if len(reviews) else reviews
-    if now_orders.empty and acts.empty:
-        return None
-    parts = []
-    if len(now_orders):
-        parts.append(f"{len(now_orders)} to place")
-    for d in ("cancel", "replace"):
-        n = int((acts.decision == d).sum()) if len(acts) else 0
-        if n:
-            parts.append(f"{n} to {d}")
-    lines = [f"{r.team} {'+' if display.is_topup(r.get('topup')) else ''}{int(r['count'])} @ {r.price:.2f}"
-             for _, r in now_orders.iterrows()]
-    lines += [f"{d} {r.team} @ {r.price:.2f}" for d in ("cancel", "replace")
-              for _, r in (acts[acts.decision == d].iterrows() if len(acts) else [])]
-    cost = f" (${now_orders.cost.sum():.2f})" if len(now_orders) else ""
-    return (f"RAPPA Kalshi: {', '.join(parts)}",
-            f"{'; '.join(lines)}{cost}. Run ./bets.sh")
+    return shared.summary(reviews, now_orders, league=ko.LEAGUE)
 
 
 # ---------- the run ----------
@@ -477,71 +260,11 @@ def run_day(client, season, week, out, now, args, confirm=input, notify=toast):
                       budget_left, orders_left, available, bankroll, args.kelly, args.max_game_share,
                       held=held)
     planned = split(planned, now, timedelta(hours=args.max_lead)).assign(planner="daily")
-    now_orders = planned[planned.decision == "order"]
     show_week(spent, events, budget, args.max_week_orders, reviews, planned, timedelta(hours=args.max_lead), basis)
 
-    path = ko.log_path(season, week, out)
-    reviews_path = out.parent / "kalshi" / "orders" / "reviews.csv"
-    acts = reviews[reviews.decision.isin(["cancel", "replace"])] if len(reviews) else reviews
-    if not args.execute:
-        ko.append_log(planned, path, "plan")
-        if len(reviews):
-            ko.append_log(reviews, reviews_path, "plan")
-        print("\ndry run: nothing sent")
-        message = summary(reviews, now_orders)
-        if args.notify and message:
-            notify(*message)
-        return 0
-    if now_orders.empty and acts.empty:
-        ko.append_log(planned, path, "plan")
-        if len(reviews):
-            ko.append_log(reviews, reviews_path, "plan")
-        print("\nnothing to place or cancel")
-        return 0
-    n_cancel = int((acts.decision == "cancel").sum()) if len(acts) else 0
-    what = ", ".join(f"{n} {w}" for n, w in ((n_cancel, "to cancel"), (len(replacements), "to replace"),
-                                             (len(now_orders), "to place")) if n)
-    if not args.yes and ko.ask(confirm, f"\nType PLACE to send these to Kalshi ({what}): ") != "PLACE":
-        ko.append_log(planned, path, "declined")
-        print("not confirmed: nothing sent")
-        return 1
-
-    reviews = reviews.copy().assign(status="") if len(reviews) else pd.DataFrame(columns=["order_id", "status"])
-    cancelled, failed = [], False
-    for i, r in acts.iterrows():
-        try:
-            resp = client.delete(f"/portfolio/events/orders/{r.order_id}", market_ticker=r.ticker)
-            reviews.at[i, "status"] = "cancelled"
-            cancelled.append({"order_id": r.order_id, "ticker": r.ticker, "client_order_id": r.client_order_id,
-                              "team": r.team, "reduced_by": (resp or {}).get("reduced_by"), "ok": True, "error": "",
-                              "reason": r.reason})
-            print("cancelled", r.team, r.ticker, f"@ {r.price:.2f}:", r.reason)
-        except KalshiError as e:
-            reviews.at[i, "status"] = "failed"
-            cancelled.append({"order_id": r.order_id, "ticker": r.ticker, "client_order_id": r.client_order_id,
-                              "team": r.team, "reduced_by": None, "ok": False, "error": str(e), "reason": r.reason})
-            print("FAILED to cancel", r.team, r.ticker, e)
-            failed = True
-            break
-    if cancelled:
-        ko._append(pd.DataFrame(cancelled).assign(cancelled_at=datetime.now(timezone.utc).isoformat(timespec="seconds")),
-                   out.parent / "kalshi" / "orders" / "cancels.csv")
-    if len(acts):
-        ko.append_log(reviews, reviews_path, "execute")
-    if failed:  # an order that may still rest: place nothing more until a rerun sees the account as it is
-        ko.append_log(planned, path, "declined")
-        print("stopping: a cancel failed, so nothing is placed; rerun to see where things stand")
-        return 1
-    done = set(reviews.order_id[reviews.status == "cancelled"])
-    if len(replacements):
-        replacements = replacements[replacements.replaces.isin(done)].assign(planner="daily")
-        replacements = split(replacements, now, timedelta(days=365))  # placed now whatever the lead
-    results = ko.execute(pd.concat([planned, replacements], ignore_index=True), client)
-    ko.append_log(results, path, "execute")
-    ko.show(results[results.decision == "order"])
-    print()
-    ko.track(client, out)
-    return 0 if not (results.status == "failed").any() else 1
+    return shared.finish(client, planned, reviews, replacements, now, ko.orders_folder(out), season, week,
+                         league=ko.LEAGUE, execute=args.execute, yes=args.yes, confirm=confirm,
+                         notify=notify if args.notify else None)
 
 
 def parse_args(argv=None):
@@ -591,8 +314,7 @@ def main(argv=None, client=None, now=None, confirm=input, notify=toast):
             print(f"week {week}'s predictions wait for the pull after week {week - 1}'s games (./update.sh)")
             return 0
         if client is None:
-            client = Client.from_env(args.env, host=kalshi.DEMO if args.demo else kalshi.PROD,
-                                     read_only=not args.execute)
+            client = Client.from_env(args.env, host=DEMO if args.demo else PROD, read_only=not args.execute)
         if not client.signed:
             raise SystemExit(f"no KALSHI_ID / KALSHI_PRIVATE_KEY in {args.env}: the budget needs the account")
         return run_day(client, season, week, args.out, now or datetime.now(timezone.utc), args, confirm, notify)
