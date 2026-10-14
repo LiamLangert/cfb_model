@@ -15,45 +15,35 @@ spread.
 Two scripts, run from the project root whenever you like:
 
 ```
-./update.sh                # pull the latest games, re-rate both leagues, rebuild the site's data
+./update.sh                # pull the latest games, re-rate both leagues, rebuild the site's data, hand RAPPA's week to ../kalshi
 ~/my_website/deploy.sh     # then publish it to fb.liamlangert.com
-./bets.sh                  # Kalshi: the orders so far, this week's plan, and place it if you say so
 ```
 
 `./update.sh` is the whole update: both leagues' pulls (`--force`, for a
 season in progress), the season re-rated (college on last season's prior,
-the NFL standalone, as the repo's seasons are), then `site/build.py`. It
+the NFL standalone, as the repo's seasons are), then `site/build.py`, and,
+once college is re-rated, `cfb.handoff`. It
 defaults to the season in progress (from August; before that, last year's)
 and takes another as `./update.sh 2025`. It publishes nothing: deploy the
 website to put the update live. A league whose pull or re-rating fails is
 left as it was and the other is still rebuilt; the script then exits 1.
 Each run's output goes to data/logs/update-<date>.log.
 
-`./bets.sh` first saves and prints what became of every Kalshi order so far
-(fills, settlements, profit: `betting.orders --track`), then plans the rest
-of the week's college games at this moment's prices (`betting.daily`). Only
-games kicking off in the next 30 hours are placed; it shows those, reviews
-any resting orders (keep, cancel, or replace), and asks for a typed PLACE
-before sending anything. Later games are listed at today's prices with the
-week's budget held for them: run it again on a later day to place those.
-It builds the week's predictions first if they are missing or older than
-the latest pull. Extra arguments go to `betting.daily` (`--bankroll 50`,
-`--max-week-share`, ...; `uv run -m betting.daily --help`
-lists them). Each run's output goes to data/logs/bets-<date>.log. Nothing
-runs on a schedule.
-
-$250 of the Kalshi account is a reserve that is never bet (`RESERVE` in
-`../kalshi/kalshi/maker.py`, shared by both projects, which trade the same
-account): the bankroll every size and cap is a share of is the account less
-it, so it still grows and shrinks with the bets, and no order spends into
-it. `--reserve` changes it for a run; `--bankroll` sizes against a fixed
-amount instead.
+Trading lives in ../kalshi (`kalshi.cfb`), which places college orders off
+RAPPA on its own schedule (daily at 4pm Eastern). All it takes from here is
+the week's win probabilities: `cfb.handoff` builds the week's predictions
+(`cfb.week_parts`) when they are missing or older than the latest pull, and
+hands every game not yet played to ../kalshi's data branch
+(`../kalshi/data/probs/cfb.json`, kalshi.handoff). ../kalshi trades a
+handoff for up to 8 days, so run `./update.sh` once a week after the
+Tuesday pull. `uv run -m cfb.handoff --no-publish` writes it without
+pushing. The orders, the bankroll and the logs are all ../kalshi's (see its
+README).
 
 ## Layout
 
 ```
 update.sh           pull, re-rate and rebuild the site's data, for both leagues
-bets.sh             Kalshi: track the orders so far, plan the week, place after a typed PLACE
 rappa/              the model, shared by both leagues
   model.py          the ridge fit: plays in, team (and optionally passer and conference) ratings out
   games.py          ratings -> game margins and win probabilities, graded against the spread
@@ -73,6 +63,7 @@ cfb/                college football, from CFBD and ESPN
   week_parts.py     one week's predictions taken apart: win probability, line, projected score, and the points from each factor
   pace.py           each team's pace and scoring so far, for week_parts' projected total
   display.py        how the site shows a quarterback's share of the passing rating
+  handoff.py        the week's win probabilities handed over to ../kalshi, which trades them
   previous_week.py  the season rated without its latest week; which prior reproduces rappa.csv
   history.py        the site's weeks: ratings through each week, and every week's predictions
 nfl/                NFL, from nflverse and ESPN
@@ -88,11 +79,6 @@ nfl/                NFL, from nflverse and ESPN
   predict_week.py   one week's predictions taken apart: win probability, line, projected score, and the points from each factor
   previous_week.py  the season rated without its latest week; which prior reproduces rappa.csv
   history.py        the site's weeks: ratings through each week, and every week's predictions
-betting/            Kalshi, college games only, on the shared ../kalshi package (also cbb_model's)
-  orders.py         the League, WEIGHT, the week's games, matching Kalshi's names; plan, place, cancel, --track
-  daily.py          the week's plan, placed 2-30 hours before each kickoff, to a week's budget
-  names.py          Kalshi's team names made comparable with CFBD's
-  display.py        the shared tables, with RAPPA and kickoffs
 research/           backtests and benchmarks; nothing above runs them
   cfb_validate.py, nfl_validate.py          the rating choices, scored on holdout plays (validation.py)
   cfb_benchmark.py, nfl_benchmark.py        RAPPA, ESPN FPI and the market: MAE and log-loss by season
@@ -101,13 +87,12 @@ research/           backtests and benchmarks; nothing above runs them
   cfb_predict_week.py                       one week's college predictions, laid out to read
   cfb_special_teams.py                      CFBD punts and kickoffs for rappa.special_teams (not in predictions)
 site/build.py       gathers both leagues' weekly ratings and predictions into ~/my_website/fb/data/
-tests/              the Kalshi code's tests, with fake transports (`uv run pytest`)
+tests/              the handoff's tests (`uv run pytest`)
 data/               not in git
   cfb/<season>/     plays, games, lines, espn, fpi, teams, recruiting, returning, roster, player_defense, rappa, qbs, outside (cache), parts_wkNN
   cfb/coaches.csv   every FBS head coach's seasons
   nfl/<season>/     plays, games, snaps, roster_week1, espn, fpi, rappa, qbs, outside (cache)
-  kalshi/orders/    every order placed, its fills and settlements, each run's plan and review
-  logs/             each update.sh and bets.sh run's output
+  logs/             each update.sh run's output
 ```
 
 Both leagues run the same pipeline: quarterbacks rated on their own, special
@@ -150,14 +135,11 @@ defaults.
 ```
 uv sync
 echo "CFBD_API_KEY=..." > .env    # for cfb.pull
-# and KALSHI_ID, KALSHI_PRIVATE_KEY in .env for bets.sh
 ```
 
-The Kalshi code is mostly the shared package in `../kalshi` (the API client,
-pricing, sizing, the plan, placing, cancelling and tracking, the daily review
-and the tables), an editable path dependency that `uv sync` installs; cbb_model
-uses the same one. `betting/` holds only what is football's. Tests: `uv run
-pytest` here, and in `../kalshi` after changing it (and in `../cbb_model`).
+The handoff needs no Kalshi key. It writes with `../kalshi`'s kalshi.handoff,
+an editable path dependency that `uv sync` installs; publishing it needs the
+kalshi repo's data branch checked out at `../kalshi/data` (see its README).
 
 ## Rating seasons from scratch, and the research
 
